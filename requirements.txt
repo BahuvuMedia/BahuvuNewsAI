@@ -1,0 +1,8 @@
+feedparser
+beautifulsoup4
+requests
+edge-tts
+moviepy
+Pillow
+duckduckgo-search
+google-generativeai

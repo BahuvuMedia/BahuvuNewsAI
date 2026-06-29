@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env
+
+# Output files
+outputs/
+Assets/news.jpg
+
+# Temporary files
+temp/
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
