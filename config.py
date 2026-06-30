@@ -1,11 +1,15 @@
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 """
 ==========================================
 BAHUVU NEWS AI
 Configuration File
 ==========================================
 """
-
-import os
 
 # ==========================================
 # PROJECT PATHS
@@ -25,7 +29,7 @@ os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 # Replace with your own Gemini API key
 
-GEMINI_API_KEY = "YOUR_REAL_KEY_HERE"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ==========================================
 # NEWS SOURCE
