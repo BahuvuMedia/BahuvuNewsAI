@@ -1,7 +1,7 @@
 import feedparser
 from bs4 import BeautifulSoup
 
-from config import RSS_URL, BAD_KEYWORDS
+from config import RSS_URL, BAD_KEYWORDS, PREFERRED_KEYWORDS
 
 
 def clean_html(text):
@@ -20,8 +20,22 @@ def is_valid_news(title):
     return not any(keyword in title for keyword in BAD_KEYWORDS)
 
 
+def calculate_score(title):
+    """Score news based on preferred keywords."""
+
+    title = title.lower()
+
+    score = 0
+
+    for keyword in PREFERRED_KEYWORDS:
+        if keyword in title:
+            score += 10
+
+    return score
+
+
 def fetch_latest_news():
-    """Fetch the latest real news article from Google News RSS."""
+    """Fetch the best news article from Google News RSS."""
 
     print("Fetching latest news...")
 
@@ -30,6 +44,9 @@ def fetch_latest_news():
     if not feed.entries:
         print("No news found.")
         return None
+
+    best_article = None
+    best_score = -1
 
     for entry in feed.entries:
 
@@ -56,10 +73,18 @@ def fetch_latest_news():
             "link": entry.get("link")
         }
 
-        print("News selected:")
-        print(title)
+        score = calculate_score(title)
 
-        return article
+        if score > best_score:
+            best_score = score
+            best_article = article
+
+    if best_article:
+
+        print("News selected:")
+        print(best_article["title"])
+
+        return best_article
 
     print("No suitable news article found.")
     return None

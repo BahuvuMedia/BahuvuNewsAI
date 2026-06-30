@@ -75,3 +75,26 @@ BAD_KEYWORDS = [
     "ipo",
     "financial results"
 ]
+
+PREFERRED_KEYWORDS = [
+    "india",
+    "andhra",
+    "telangana",
+    "isro",
+    "space",
+    "science",
+    "technology",
+    "ai",
+    "health",
+    "education",
+    "parliament",
+    "prime minister",
+    "president",
+    "supreme court",
+    "election",
+    "sports",
+    "cricket",
+    "olympics",
+    "economy"
+
+]
