@@ -1,56 +1,31 @@
 """
-Bahuvu News Branding Configuration
+BAHUVU News - Branding Configuration
 """
 
-# --------------------------------------------------
-# CHANNEL
-# --------------------------------------------------
+BRAND = {
+    "name": "Bahuvu News",
+    "english": "BAHUVU NEWS",
+    "telugu": "Bahuvu News",
+    "tagline": "Fast • Trusted •Accurate",
+}
 
-CHANNEL_NAME = "Bahuvu News"
-CHANNEL_NAME_ENGLISH = "BAHUVU"
-CHANNEL_NAME_TELUGU = "బాహువు"
+COLORS = {
+    "primary": "#D50000",
+    "secondary": "#FFC107",
+    "white": "#FFFFFF",
+    "black": "#1A1A1A",
+}
 
-# --------------------------------------------------
-# COLORS
-# --------------------------------------------------
+def get_brand_name():
+    return BRAND["name"]
 
-PRIMARY_RED = "#D50000"
-SECONDARY_GOLD = "#FFC107"
-WHITE = "#FFFFFF"
-BLACK = "#1A1A1A"
+def get_logo_text():
+    return BRAND["english"]
 
-# --------------------------------------------------
-# VIDEO
-# --------------------------------------------------
+def get_brand_color(name="primary"):
+    return COLORS.get(name, COLORS["primary"])
 
-VIDEO_FPS = 24
-
-# --------------------------------------------------
-# WATERMARK
-# --------------------------------------------------
-
-WATERMARK_ENABLED = True
-WATERMARK_INTERVAL = 8          # seconds
-WATERMARK_OPACITY = 0.20
-
-WATERMARK_MARGIN_X = 30
-WATERMARK_MARGIN_Y = 30
-
-# --------------------------------------------------
-# LOWER THIRD
-# --------------------------------------------------
-
-LOWER_THIRD_HEIGHT = 120
-
-# --------------------------------------------------
-# CATEGORY BAR
-# --------------------------------------------------
-
-CATEGORY_BAR_HEIGHT = 70
-
-# --------------------------------------------------
-# INTRO / OUTRO
-# --------------------------------------------------
-
-INTRO_DURATION = 4
-OUTRO_DURATION = 4
+if __name__ == "__main__":
+    print("Brand :", get_brand_name())
+    print("Logo  :", get_logo_text())
+    print("Color :", get_brand_color())
