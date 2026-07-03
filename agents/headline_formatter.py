@@ -1,20 +1,32 @@
 # agents/headline_formatter.py
 
-def format_headline(text, max_words=10):
+MAX_WORDS = 10
+
+
+def format_headline(text):
     """
-    Formats news headlines for graphics.
-    Keeps headline short, clean, and uppercase.
+    Clean and format news headlines for graphics.
     """
 
     if not text:
         return "BREAKING NEWS"
 
-    words = text.strip().split()
-    short_text = " ".join(words[:max_words])
+    # Remove extra spaces
+    text = " ".join(text.split())
 
-    return short_text.upper()
+    # Limit headline length
+    words = text.split()
+
+    if len(words) > MAX_WORDS:
+        text = " ".join(words[:MAX_WORDS]) + "..."
+
+    return text.upper()
 
 
 if __name__ == "__main__":
-    sample = "Heavy rains expected across Andhra Pradesh and Telangana this week"
+    sample = (
+        "Heavy rains expected across Andhra Pradesh and Telangana this week "
+        "causing severe flooding in several districts"
+    )
+
     print(format_headline(sample))
