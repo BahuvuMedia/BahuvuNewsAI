@@ -1,11 +1,26 @@
+# agents/news_template.py
+
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+from agents.theme import COLORS
+from agents.fonts import get_font
+
+WIDTH = 1280
+HEIGHT = 720
+
+OUTPUT_DIR = Path("outputs/graphics")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def create_news_template(news):
     img = Image.new("RGB", (WIDTH, HEIGHT), COLORS["background_dark"])
-
     draw = ImageDraw.Draw(img)
+
     draw.rectangle((0, 0, WIDTH, 90), fill="#b00020")
 
-    font = get_font(36)
-    draw.text((40, 25), "BAHUVU NEWS", font=font, fill=COLORS["text_white"])
+    logo_font = get_font(36)
+    draw.text((40, 25), "BAHUVU NEWS", font=logo_font, fill=COLORS["text_white"])
 
     headline_font = get_font(56)
     draw.text(
@@ -38,5 +53,16 @@ def create_news_template(news):
         font=placeholder_font,
     )
 
-    img.save(OUTPUT_DIR / "news_template.png")
+    return img
+
+
+if __name__ == "__main__":
+    sample_news = {
+        "title": "Heavy Rain Continues Across Andhra Pradesh",
+        "summary": "Officials advise people to stay alert as heavy rainfall continues in several districts.",
+        "category": "WEATHER",
+    }
+
+    image = create_news_template(sample_news)
+    image.save(OUTPUT_DIR / "news_template.png")
     print("Created news_template.png")
