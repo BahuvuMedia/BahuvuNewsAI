@@ -3,12 +3,15 @@
 from pathlib import Path
 
 from agents.news_template import create_news_template
+from agents.headline_formatter import format_headline
 
 OUTPUT_DIR = Path("outputs/final")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def generate_final_news_graphic(news, filename="final_news.png"):
+    news["title"] = format_headline(news.get("title", "BREAKING NEWS"))
+
     image = create_news_template(news)
 
     output_path = OUTPUT_DIR / filename
