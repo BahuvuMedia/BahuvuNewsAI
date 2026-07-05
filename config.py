@@ -17,7 +17,7 @@ Configuration File
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ASSETS_DIR = os.path.join(BASE_DIR, "Assets")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 
 os.makedirs(ASSETS_DIR, exist_ok=True)
