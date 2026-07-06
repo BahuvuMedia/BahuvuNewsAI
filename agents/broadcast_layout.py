@@ -1,0 +1,45 @@
+# agents/broadcast_layout.py
+
+WIDTH = 1280
+HEIGHT = 720
+
+# Global spacing
+MARGIN_X = 50
+MARGIN_Y = 30
+
+# Header
+HEADER_X = 0
+HEADER_Y = 0
+HEADER_W = WIDTH
+HEADER_H = 88
+
+LOGO_X = 40
+LOGO_Y = 24
+
+# Main news image area
+IMAGE_X = 50
+IMAGE_Y = 120
+IMAGE_W = 540
+IMAGE_H = 360
+
+# Text panel
+TEXT_X = 630
+TEXT_Y = 125
+TEXT_W = 590
+
+HEADLINE_X = TEXT_X
+HEADLINE_Y = TEXT_Y
+HEADLINE_W = TEXT_W
+
+SUMMARY_X = TEXT_X
+SUMMARY_Y = 390
+SUMMARY_W = TEXT_W
+
+# Footer
+FOOTER_X = 0
+FOOTER_Y = 650
+FOOTER_W = WIDTH
+FOOTER_H = 70
+
+FOOTER_TEXT_X = 50
+FOOTER_TEXT_Y = 668
