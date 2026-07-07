@@ -43,3 +43,46 @@ FOOTER_H = 70
 
 FOOTER_TEXT_X = 50
 FOOTER_TEXT_Y = 668
+
+
+def get_layout():
+    return {
+        "width": WIDTH,
+        "height": HEIGHT,
+
+        "margin_x": MARGIN_X,
+        "margin_y": MARGIN_Y,
+
+        "header_x": HEADER_X,
+        "header_y": HEADER_Y,
+        "header_w": HEADER_W,
+        "header_h": HEADER_H,
+
+        "logo_x": LOGO_X,
+        "logo_y": LOGO_Y,
+
+        "image_x": IMAGE_X,
+        "image_y": IMAGE_Y,
+        "image_w": IMAGE_W,
+        "image_h": IMAGE_H,
+
+        "text_x": TEXT_X,
+        "text_y": TEXT_Y,
+        "text_w": TEXT_W,
+
+        "headline_x": HEADLINE_X,
+        "headline_y": HEADLINE_Y,
+        "headline_w": HEADLINE_W,
+
+        "summary_x": SUMMARY_X,
+        "summary_y": SUMMARY_Y,
+        "summary_w": SUMMARY_W,
+
+        "footer_x": FOOTER_X,
+        "footer_y": FOOTER_Y,
+        "footer_w": FOOTER_W,
+        "footer_h": FOOTER_H,
+
+        "footer_text_x": FOOTER_TEXT_X,
+        "footer_text_y": FOOTER_TEXT_Y,
+    }

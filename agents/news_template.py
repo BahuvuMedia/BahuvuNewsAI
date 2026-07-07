@@ -37,8 +37,9 @@ def wrap_text(draw, text, font, max_width):
     for word in words:
         test_line = f"{line} {word}".strip()
         bbox = draw.textbbox((0, 0), test_line, font=font)
+        text_width = bbox[2] - bbox[0]
 
-        if bbox[2] <= max_width:
+        if text_width <= max_width:
             line = test_line
         else:
             if line:
@@ -51,31 +52,27 @@ def wrap_text(draw, text, font, max_width):
     return lines
 
 
-def create_news_template(news):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COLORS["background_dark"])
-    draw = ImageDraw.Draw(img)
-
-    # Background
+def draw_background(draw):
     for y in range(HEIGHT):
-        shade = int(18 + (y / HEIGHT) * 18)
+        shade = int(16 + (y / HEIGHT) * 24)
         draw.line((0, y, WIDTH, y), fill=(shade, shade, shade + 8))
 
-    # Header
-    draw_header(draw)
 
+def draw_branding(draw):
     logo_font = get_font(38)
     draw.text((42, 24), "BAHUVU NEWS", font=logo_font, fill="white")
 
     time_font = get_font(22)
     now = datetime.now().strftime("%d %b %Y")
-    draw.text((WIDTH - 210, 34), now, font=time_font, fill="white")
+    draw.text((WIDTH - 250, 34), now, font=time_font, fill="white")
 
-    # Main image
-    news_img = load_news_image(news.get("image"))
+
+def draw_main_image(draw, canvas, image_path):
+    news_img = load_news_image(image_path)
 
     if news_img:
         news_img = resize_and_crop(news_img, IMAGE_W, IMAGE_H)
-        img.paste(news_img, (IMAGE_X, IMAGE_Y))
+        canvas.paste(news_img, (IMAGE_X, IMAGE_Y))
     else:
         draw.rectangle(
             (IMAGE_X, IMAGE_Y, IMAGE_X + IMAGE_W, IMAGE_Y + IMAGE_H),
@@ -88,7 +85,62 @@ def create_news_template(news):
         width=3,
     )
 
-    # Category badge
+
+def draw_headline_block(draw, headline):
+    headline_font = get_headline_font(headline)
+    headline_lines = wrap_text(draw, headline, headline_font, HEADLINE_W)[:3]
+
+    y = HEADLINE_Y
+
+    for line in headline_lines:
+        draw.text((HEADLINE_X + 2, y + 2), line, font=headline_font, fill="#000000")
+        draw.text((HEADLINE_X, y), line, font=headline_font, fill="white")
+        y += 58
+
+    return y
+
+
+def draw_summary_block(draw, summary, start_y):
+    if not summary:
+        return
+
+    summary_font = get_summary_font(summary)
+    summary_lines = wrap_text(draw, summary, summary_font, SUMMARY_W)[:4]
+
+    y = start_y + 25
+
+    for line in summary_lines:
+        draw.text((SUMMARY_X, y), line, font=summary_font, fill="#dddddd")
+        y += 36
+
+
+def draw_footer_ticker(draw):
+    footer_y = HEIGHT - 78
+
+    draw.rectangle((0, footer_y, WIDTH, HEIGHT), fill="#111111")
+    draw.rectangle((0, footer_y, WIDTH, footer_y + 5), fill="#ffcc00")
+
+    ticker_font = get_font(25)
+    ticker = "BREAKING UPDATES  •  BAHUVU NEWS  •  TELUGU NEWS  •  DIGITAL NEWSROOM"
+
+    draw.text((42, footer_y + 26), ticker, font=ticker_font, fill="white")
+
+
+def create_news_template(news):
+    img = Image.new("RGB", (WIDTH, HEIGHT), COLORS["background_dark"])
+    draw = ImageDraw.Draw(img)
+
+    draw_background(draw)
+
+    draw_header(draw)
+    draw_branding(draw)
+
+    draw_main_image(
+        draw=draw,
+        canvas=img,
+        image_path=news.get("image") or news.get("image_path"),
+    )
+
     draw_category_badge(
         draw,
         news.get("category", "BREAKING NEWS"),
@@ -96,42 +148,21 @@ def create_news_template(news):
         y=126,
     )
 
-    # Headline
-    headline = news.get("title", "")
-    headline_font = get_headline_font(headline)
+    headline_bottom = draw_headline_block(
+        draw,
+        news.get("title", "Breaking News Update"),
+    )
 
-    headline_lines = wrap_text(draw, headline, headline_font, HEADLINE_W)
-    headline_lines = headline_lines[:3]
+    draw_summary_block(
+        draw,
+        news.get("summary", ""),
+        headline_bottom,
+    )
 
-    y = HEADLINE_Y
-    for line in headline_lines:
-        draw.text((HEADLINE_X, y), line, font=headline_font, fill="white")
-        y += 58
-
-    # Summary
-    summary = news.get("summary", "")
-    summary_font = get_summary_font(summary)
-
-    summary_y = y + 25
-    summary_lines = wrap_text(draw, summary, summary_font, SUMMARY_W)
-    summary_lines = summary_lines[:4]
-
-    sy = summary_y
-    for line in summary_lines:
-        draw.text((SUMMARY_X, sy), line, font=summary_font, fill="#dddddd")
-        sy += 36
-
-    # Footer ticker
-    footer_y = HEIGHT - 78
-    draw.rectangle((0, footer_y, WIDTH, HEIGHT), fill="#111111")
-    draw.rectangle((0, footer_y, WIDTH, footer_y + 5), fill="#ffcc00")
-
-    ticker_font = get_font(25)
-    ticker = "BREAKING UPDATES  •  BAHUVU NEWS  •  TELUGU NEWS  •  DIGITAL NEWSROOM"
-    draw.text((42, footer_y + 26), ticker, font=ticker_font, fill="white")
+    draw_footer_ticker(draw)
 
     output_path = OUTPUT_DIR / "news_template.png"
-    img.save(output_path)
+    img.save(output_path, quality=95)
 
     print(f"Created: {output_path}")
     return output_path
