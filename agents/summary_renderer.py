@@ -1,5 +1,12 @@
 # agents/summary_renderer.py
 
+"""
+BahuvuNewsAI - Summary Renderer
+
+Compatible with existing project code.
+Uses the Professional Text Engine internally.
+"""
+
 try:
     from agents.fonts import get_font
 except Exception:
@@ -9,42 +16,34 @@ except Exception:
         return ImageFont.load_default()
 
 
+from agents.text_engine import (
+    text_width,
+    text_height,
+    wrap_text,
+    fit_text_block,
+)
+
+
 def text_size(draw, text, font):
-    box = draw.textbbox((0, 0), text, font=font)
-    return box[2] - box[0], box[3] - box[1]
-
-
-def wrap_text(draw, text, font, max_width):
-    words = text.split()
-    lines = []
-    current = ""
-
-    for word in words:
-        test = word if not current else current + " " + word
-        width, _ = text_size(draw, test, font)
-
-        if width <= max_width:
-            current = test
-        else:
-            if current:
-                lines.append(current)
-            current = word
-
-    if current:
-        lines.append(current)
-
-    return lines
+    return text_width(draw, text, font), text_height(draw, text, font)
 
 
 def draw_summary(draw, text, x, y, max_width, max_lines=3):
-    font = get_font(34)
-    lines = wrap_text(draw, text, font, max_width)[:max_lines]
+    font, lines, size = fit_text_block(
+        draw=draw,
+        text=text,
+        max_width=max_width,
+        max_height=150,
+        start_size=34,
+        min_size=24,
+        line_spacing=10,
+        max_lines=max_lines,
+    )
 
     current_y = y
 
     for line in lines:
         draw.text((x, current_y), line, font=font, fill=(225, 225, 225))
-        _, h = text_size(draw, line, font)
-        current_y += h + 10
+        current_y += text_height(draw, line, font) + 10
 
     return current_y
