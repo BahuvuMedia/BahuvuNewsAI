@@ -1,55 +1,53 @@
-import asyncio
+# main.py
+"""
+BahuvuNewsAI - Master Orchestrator
+Version: v1.3
 
-from agents.news_fetcher import fetch_latest_news
-from agents.image_downloader import download_image
-from agents.script_writer import generate_script
-from agents.voice_generator import generate_voice
-from agents.video_generator import create_video
+Connects the stable editorial news pipeline with the future video pipeline.
+"""
+
+from agents.news_pipeline import run_news_pipeline
+
+
+def get_sample_news():
+    return [
+        {
+            "title": "Heavy Rain Continues Across Andhra Pradesh as Officials Issue Alert",
+            "summary": "Officials advise people to stay alert as heavy rainfall continues in several districts of Andhra Pradesh.",
+            "category": "weather",
+            "image_path": "assets/images/sample.jpg",
+            "source": "BAHUVU NEWS",
+        },
+        {
+            "title": "Government Announces New Education Support Measures for Students",
+            "summary": "Officials said the new measures are designed to support students and improve access to education services across the state.",
+            "category": "education",
+            "image_path": "assets/images/sample.jpg",
+            "source": "BAHUVU NEWS",
+        },
+    ]
 
 
 def main():
-
     print("=" * 50)
-    print("BAHUVU NEWS AI v2")
+    print("BAHUVU NEWS AI - MASTER ORCHESTRATOR v1.3")
     print("=" * 50)
 
-    print("\n[1/5] Fetching latest news...")
+    print("\n[1/1] Running professional editorial news pipeline...")
 
-    news = fetch_latest_news()
+    news_items = get_sample_news()
+    output_path = run_news_pipeline(news_items)
 
-    if news is None:
-        print("No news found.")
+    if not output_path:
+        print("\nNo publishable story was found.")
         return
 
-    print("[OK] News fetched")
-
-    print("\n[2/5] Downloading image...")
-
-    download_image(news.get("image"))
-
-    print("[OK] Image ready")
-
-    print("\n[3/5] Generating Telugu script...")
-
-    generate_script(news["content"])
-
-    print("[OK] Script ready")
-
-    print("\n[4/5] Generating voice...")
-
-    asyncio.run(generate_voice())
-
-    print("[OK] Voice ready")
-
-    print("\n[5/5] Creating video...")
-
-    create_video()
-
-    print("[OK] Video ready")
+    print("\n[OK] Editorial pipeline completed")
+    print("Output:", output_path)
 
     print("\n" + "=" * 50)
     print("SUCCESS")
-    print("Bahuvu News video created successfully.")
+    print("Bahuvu News graphic package created successfully.")
     print("=" * 50)
 
 
