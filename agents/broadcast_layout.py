@@ -1,88 +1,113 @@
 # agents/broadcast_layout.py
 
-WIDTH = 1280
-HEIGHT = 720
+"""
+BahuvuNewsAI - Broadcast Layout Manager
+Version: v0.95
 
-# Global spacing
-MARGIN_X = 50
-MARGIN_Y = 30
+This module exposes clean layout helpers while using agents.layout
+as the single source of truth for all dimensions and positions.
+"""
 
-# Header
-HEADER_X = 0
-HEADER_Y = 0
-HEADER_W = WIDTH
-HEADER_H = 88
+from agents.layout import (
+    WIDTH,
+    HEIGHT,
+    MARGIN,
+    GAP,
+    SMALL_GAP,
+    LARGE_GAP,
+    PADDING_SMALL,
+    PADDING_MEDIUM,
+    PADDING_LARGE,
+    CORNER_RADIUS,
+    HEADER,
+    CATEGORY,
+    PHOTO,
+    TEXT,
+    HEADLINE,
+    SUMMARY,
+    FOOTER,
+    SAFE_AREA,
+    get_region,
+)
 
-LOGO_X = 40
-LOGO_Y = 24
 
-# Main news image area
-IMAGE_X = 50
-IMAGE_Y = 120
-IMAGE_W = 540
-IMAGE_H = 360
+BROADCAST_LAYOUT = {
+    "canvas": {
+        "width": WIDTH,
+        "height": HEIGHT,
+    },
+    "spacing": {
+        "margin": MARGIN,
+        "gap": GAP,
+        "small_gap": SMALL_GAP,
+        "large_gap": LARGE_GAP,
+        "padding_small": PADDING_SMALL,
+        "padding_medium": PADDING_MEDIUM,
+        "padding_large": PADDING_LARGE,
+        "corner_radius": CORNER_RADIUS,
+    },
+    "regions": {
+        "header": HEADER,
+        "category": CATEGORY,
+        "photo": PHOTO,
+        "text": TEXT,
+        "headline": HEADLINE,
+        "summary": SUMMARY,
+        "footer": FOOTER,
+        "safe_area": SAFE_AREA,
+    },
+}
 
-# Text panel
-TEXT_X = 630
-TEXT_Y = 125
-TEXT_W = 590
 
-HEADLINE_X = TEXT_X
-HEADLINE_Y = TEXT_Y
-HEADLINE_W = TEXT_W
-
-SUMMARY_X = TEXT_X
-SUMMARY_Y = 390
-SUMMARY_W = TEXT_W
-
-# Footer
-FOOTER_X = 0
-FOOTER_Y = 650
-FOOTER_W = WIDTH
-FOOTER_H = 70
-
-FOOTER_TEXT_X = 50
-FOOTER_TEXT_Y = 668
+def get_canvas_size():
+    return WIDTH, HEIGHT
 
 
 def get_layout():
-    return {
-        "width": WIDTH,
-        "height": HEIGHT,
+    return BROADCAST_LAYOUT
 
-        "margin_x": MARGIN_X,
-        "margin_y": MARGIN_Y,
 
-        "header_x": HEADER_X,
-        "header_y": HEADER_Y,
-        "header_w": HEADER_W,
-        "header_h": HEADER_H,
+def get_layout_region(name: str):
+    return get_region(name)
 
-        "logo_x": LOGO_X,
-        "logo_y": LOGO_Y,
 
-        "image_x": IMAGE_X,
-        "image_y": IMAGE_Y,
-        "image_w": IMAGE_W,
-        "image_h": IMAGE_H,
+def get_region_box(name: str):
+    return get_region(name).box
 
-        "text_x": TEXT_X,
-        "text_y": TEXT_Y,
-        "text_w": TEXT_W,
 
-        "headline_x": HEADLINE_X,
-        "headline_y": HEADLINE_Y,
-        "headline_w": HEADLINE_W,
+def get_region_position(name: str):
+    region = get_region(name)
+    return region.x, region.y
 
-        "summary_x": SUMMARY_X,
-        "summary_y": SUMMARY_Y,
-        "summary_w": SUMMARY_W,
 
-        "footer_x": FOOTER_X,
-        "footer_y": FOOTER_Y,
-        "footer_w": FOOTER_W,
-        "footer_h": FOOTER_H,
+def get_region_size(name: str):
+    region = get_region(name)
+    return region.width, region.height
 
-        "footer_text_x": FOOTER_TEXT_X,
-        "footer_text_y": FOOTER_TEXT_Y,
-    }
+
+def get_text_start_position():
+    return TEXT.x, TEXT.y
+
+
+def get_photo_box():
+    return PHOTO.box
+
+
+def get_headline_box():
+    return HEADLINE.box
+
+
+def get_summary_box():
+    return SUMMARY.box
+
+
+def get_footer_box():
+    return FOOTER.box
+
+
+def get_header_box():
+    return HEADER.box
+
+
+def get_category_box():
+    return CATEGORY.box

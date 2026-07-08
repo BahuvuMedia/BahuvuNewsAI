@@ -6,16 +6,15 @@ from PIL import Image, ImageDraw
 
 from agents.theme import COLORS
 from agents.fonts import get_font
-from agents.image_loader import load_news_image, resize_and_crop
 from agents.broadcast_layout import (
     WIDTH,
     HEIGHT,
-    get_photo_box,
     get_headline_box,
     get_summary_box,
 )
 from agents.header import draw_header
 from agents.category_badge import draw_category_badge
+from agents.photo_layout import render_photo
 from agents.headline_renderer import draw_headline
 from agents.summary_renderer import draw_summary
 
@@ -38,27 +37,6 @@ def draw_branding(draw):
     draw.text((WIDTH - 250, 34), now, font=time_font, fill="white")
 
 
-def draw_main_image(draw, canvas, image_path):
-    image_x, image_y, image_w, image_h = get_photo_box()
-
-    news_img = load_news_image(image_path)
-
-    if news_img:
-        news_img = resize_and_crop(news_img, image_w, image_h)
-        canvas.paste(news_img, (image_x, image_y))
-    else:
-        draw.rectangle(
-            (image_x, image_y, image_x + image_w, image_y + image_h),
-            fill="#333333",
-        )
-
-    draw.rectangle(
-        (image_x - 3, image_y - 3, image_x + image_w + 3, image_y + image_h + 3),
-        outline="#ffcc00",
-        width=3,
-    )
-
-
 def draw_footer_ticker(draw):
     footer_y = HEIGHT - 78
 
@@ -72,15 +50,14 @@ def draw_footer_ticker(draw):
 
 
 def create_news_template(news):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COLORS["background_dark"])
+    img = Image.new("RGBA", (WIDTH, HEIGHT), COLORS["background_dark"])
     draw = ImageDraw.Draw(img)
 
     draw_background(draw)
-
     draw_header(draw)
     draw_branding(draw)
 
-    draw_main_image(
+    render_photo(
         draw=draw,
         canvas=img,
         image_path=news.get("image") or news.get("image_path"),
@@ -117,7 +94,7 @@ def create_news_template(news):
     draw_footer_ticker(draw)
 
     output_path = OUTPUT_DIR / "news_template.png"
-    img.save(output_path, quality=95)
+    img.convert("RGB").save(output_path, quality=95)
 
     print(f"Created: {output_path}")
     return output_path
