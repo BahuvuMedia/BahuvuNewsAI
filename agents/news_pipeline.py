@@ -1,62 +1,99 @@
 # agents/news_pipeline.py
-
 """
-BahuvuNewsAI - Safe News Pipeline Bridge
+BahuvuNewsAI - Professional News Pipeline
 Version: v1.2
 
-Purpose:
-- Use existing news_fetcher.py without rewriting it
-- Convert fetched news into final_graphic_generator format
-- Generate one final publishable news graphic safely
+This module connects the editorial policy engine with the graphics generator.
+
+Responsibilities:
+- Receive raw news items
+- Apply Bahuvu editorial policy
+- Select the best story
+- Convert story data into final graphic input
+- Generate a publishable news graphic
 """
 
-from agents.news_fetcher import fetch_latest_news
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from agents.news_policy import filter_news_items
 from agents.final_graphic_generator import generate_final_news_graphic
 
+OUTPUT_PATH = Path("outputs/graphics/pipeline_news_graphic.png")
 
-DEFAULT_LOCAL_IMAGE = "assets/images/sample.jpg"
+
+def clean_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+
+    return " ".join(str(value).strip().split())
 
 
-def normalize_news(news):
-    if not news:
+def select_top_story(news_items: List[Dict]) -> Optional[Dict]:
+    accepted_items = filter_news_items(news_items)
+
+    if not accepted_items:
         return None
 
+    return accepted_items[0]
+
+
+def prepare_graphic_input(story: Dict) -> Dict:
     return {
-        "title": news.get("title", "BREAKING NEWS"),
-        "summary": (
-            news.get("summary")
-            or news.get("description")
-            or news.get("content")
-            or "More details are expected soon."
-        ),
-        "category": news.get("category", "GENERAL"),
-        "image_path": DEFAULT_LOCAL_IMAGE,
-        "source": news.get("source", "Google News"),
-        "link": news.get("link", ""),
+        "title": clean_text(story.get("title")),
+        "summary": clean_text(story.get("summary")),
+        "category": clean_text(story.get("category")) or "GENERAL",
+        "image_path": clean_text(story.get("image_path")) or "assets/images/sample.jpg",
     }
 
 
-def run_news_pipeline():
-    print("=" * 50)
-    print("BahuvuNewsAI News Pipeline v1.2")
-    print("=" * 50)
+def run_news_pipeline(news_items: List[Dict]) -> Optional[Path]:
+    top_story = select_top_story(news_items)
 
-    raw_news = fetch_latest_news()
-
-    if not raw_news:
-        print("No news available for graphic generation.")
+    if not top_story:
+        print("No publishable stories found.")
         return None
 
-    prepared_news = normalize_news(raw_news)
+    graphic_input = prepare_graphic_input(top_story)
 
-    print("Generating final graphic from fetched news...")
-    output_path = generate_final_news_graphic(prepared_news)
+    print("BahuvuNewsAI Pipeline")
+    print("=" * 40)
+    print("Selected Story:", graphic_input["title"])
+    print("Category:", graphic_input["category"])
+    print("Score:", top_story.get("score"))
+    print("Image:", graphic_input["image_path"])
+    print("=" * 40)
 
-    print("Pipeline completed successfully.")
-    print(f"Output: {output_path}")
+    generate_final_news_graphic(
+    news=graphic_input,
+    filename="pipeline_news_graphic.png",
+)
+    print("Pipeline graphic created:", OUTPUT_PATH)
 
-    return output_path
+    return OUTPUT_PATH
 
 
 if __name__ == "__main__":
-    run_news_pipeline()
+    sample_news_items = [
+        {
+            "title": "Heavy Rain Continues Across Andhra Pradesh as Officials Issue Alert",
+            "summary": "Officials advise people to stay alert as heavy rainfall continues in several districts of Andhra Pradesh.",
+            "category": "weather",
+            "image_path": "assets/images/sample.jpg",
+            "source": "Sample",
+        },
+        {
+            "title": "Short news",
+            "summary": "Too small.",
+            "category": "general",
+        },
+        {
+            "title": "Government Announces New Education Support Measures for Students",
+            "summary": "Officials said the new measures are designed to support students and improve access to education services across the state.",
+            "category": "education",
+            "image_path": "assets/images/sample.jpg",
+            "source": "Sample",
+        },
+    ]
+
+    run_news_pipeline(sample_news_items)
