@@ -2,57 +2,63 @@
 
 """
 BahuvuNewsAI - Headline Renderer
-
-Compatible with existing project code.
-Uses the new Professional Text Engine internally.
+Version: v1.1 Broadcast Headline Layout
 """
 
-try:
-    from agents.fonts import get_font
-except Exception:
-    from PIL import ImageFont
-
-    def get_font(size, bold=False):
-        return ImageFont.load_default()
+from agents.fonts import get_font
 
 
-from agents.text_engine import (
-    text_width,
-    text_height,
-    wrap_text,
-    fit_text_block,
-)
+def measure_text(draw, text, font):
+    box = draw.textbbox((0, 0), text, font=font)
+    return box[2] - box[0], box[3] - box[1]
 
 
-def text_size(draw, text, font):
-    return text_width(draw, text, font), text_height(draw, text, font)
+def wrap_headline(draw, text, font, max_width):
+    words = str(text).split()
+    lines = []
+    current = ""
+
+    for word in words:
+        test_line = word if not current else current + " " + word
+        width, _ = measure_text(draw, test_line, font)
+
+        if width <= max_width:
+            current = test_line
+        else:
+            if current:
+                lines.append(current)
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines
 
 
 def fit_headline(draw, text, max_width, max_lines=3):
-    font, lines, size = fit_text_block(
-        draw=draw,
-        text=text,
-        max_width=max_width,
-        max_height=220,
-        start_size=74,
-        min_size=38,
-        line_spacing=14,
-        max_lines=max_lines,
-    )
+    for size in range(38, 25, -2):
+        font = get_font(size)
+        lines = wrap_headline(draw, text, font, max_width)
 
-    return font, lines
+        if len(lines) <= max_lines:
+            return font, lines
+
+    font = get_font(26)
+    lines = wrap_headline(draw, text, font, max_width)
+    return font, lines[:max_lines]
 
 
 def draw_headline(draw, text, x, y, max_width, fill=(255, 255, 255)):
     font, lines = fit_headline(draw, text, max_width)
 
-    line_gap = 14
+    line_gap = 8
     current_y = y
 
     for line in lines:
-        draw.text((x + 3, current_y + 3), line, font=font, fill=(0, 0, 0))
+        draw.text((x + 2, current_y + 2), line, font=font, fill=(0, 0, 0))
         draw.text((x, current_y), line, font=font, fill=fill)
 
-        current_y += text_height(draw, line, font) + line_gap
+        _, line_height = measure_text(draw, line, font)
+        current_y += line_height + line_gap
 
     return current_y
