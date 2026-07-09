@@ -2,56 +2,29 @@
 
 """
 BahuvuNewsAI - News Fetcher
-Version: v1.4
+Version: v1.8
 
-Fetches, cleans, filters, and scores RSS news articles.
-This module does NOT make final editorial decisions.
-It prepares clean news data for the pipeline.
+Fetches raw RSS news articles.
+
+This module only collects articles from RSS sources and converts them into
+a consistent article dictionary.
+
+Filtering, cleaning, and ranking are handled by separate modules.
 """
 
 import feedparser
-from bs4 import BeautifulSoup
 
-from agents.config import RSS_URL, BAD_KEYWORDS, PREFERRED_KEYWORDS
-
-
-def clean_html(text):
-    """Remove HTML tags from RSS descriptions."""
-    if not text:
-        return ""
-
-    soup = BeautifulSoup(text, "html.parser")
-    return soup.get_text(" ", strip=True)
+from agents.config import RSS_URL
+from agents.news_cleaner import clean_articles
+from agents.news_filter import filter_articles
+from agents.news_ranker import rank_articles, get_top_article
 
 
 def normalize_text(text):
-    """Normalize text for safer comparison."""
+    """Normalize basic text values safely."""
     if not text:
         return ""
     return str(text).strip()
-
-
-def is_valid_news(title):
-    """Reject advertisements, market reports, and unwanted items."""
-    title = normalize_text(title).lower()
-
-    if not title:
-        return False
-
-    return not any(keyword.lower() in title for keyword in BAD_KEYWORDS)
-
-
-def calculate_score(title, description=""):
-    """Score news based on preferred keywords."""
-    text = f"{title} {description}".lower()
-
-    score = 0
-
-    for keyword in PREFERRED_KEYWORDS:
-        if keyword.lower() in text:
-            score += 10
-
-    return score
 
 
 def extract_image(entry):
@@ -66,27 +39,26 @@ def extract_image(entry):
 
 
 def build_article(entry):
-    """Convert RSS entry into a clean article dictionary."""
+    """Convert RSS entry into a standard raw article dictionary."""
     title = normalize_text(entry.get("title", ""))
-    description = clean_html(entry.get("summary", ""))
+    description = normalize_text(entry.get("summary", ""))
     link = entry.get("link")
     image = extract_image(entry)
 
     return {
         "title": title,
         "description": description,
-        "content": description,
         "summary": description,
+        "content": description,
         "image": image,
         "link": link,
-        "score": calculate_score(title, description),
         "source": "Google News RSS",
     }
 
 
-def fetch_news(limit=10):
-    """Fetch multiple clean news articles from RSS."""
-    print("Fetching news from RSS...")
+def fetch_news(limit=20):
+    """Fetch raw news articles from RSS."""
+    print("Fetching raw news from RSS...")
 
     feed = feedparser.parse(RSS_URL)
 
@@ -97,19 +69,14 @@ def fetch_news(limit=10):
     articles = []
 
     for entry in feed.entries:
-        title = normalize_text(entry.get("title", ""))
-
-        if not is_valid_news(title):
-            continue
-
         article = build_article(entry)
-        articles.append(article)
 
-    articles.sort(key=lambda item: item["score"], reverse=True)
+        if article.get("title"):
+            articles.append(article)
 
     selected_articles = articles[:limit]
 
-    print(f"Fetched {len(selected_articles)} usable news articles.")
+    print(f"Fetched {len(selected_articles)} raw news articles.")
 
     return selected_articles
 
@@ -118,19 +85,23 @@ def fetch_latest_news():
     """
     Backward-compatible helper.
 
-    Returns the highest-scoring article, or None.
-    Existing pipeline code can continue using this safely.
+    Fetches, cleans, filters, ranks, and returns the best article.
+    This keeps older pipeline code working safely.
     """
-    articles = fetch_news(limit=10)
+    raw_articles = fetch_news(limit=20)
+    cleaned_articles = clean_articles(raw_articles)
+    filtered_articles = filter_articles(cleaned_articles)
+    ranked_articles = rank_articles(filtered_articles)
 
-    if not articles:
+    best_article = get_top_article(ranked_articles)
+
+    if not best_article:
         print("No suitable news article found.")
         return None
 
-    best_article = articles[0]
-
     print("News selected:")
     print(best_article["title"])
+    print("Rank score:", best_article.get("rank_score", 0))
 
     return best_article
 
@@ -141,5 +112,5 @@ if __name__ == "__main__":
     if latest:
         print("-" * 60)
         print("TITLE:", latest["title"])
-        print("SCORE:", latest["score"])
-        print("LINK:", latest["link"])
+        print("RANK SCORE:", latest.get("rank_score", 0))
+        print("LINK:", latest.get("link"))
