@@ -29,3 +29,34 @@ SHORTS_DIR = OUTPUT_DIR / "shorts"
 VIDEOS_DIR = OUTPUT_DIR / "videos"
 AUDIO_DIR = OUTPUT_DIR / "audio"
 TEMP_DIR = OUTPUT_DIR / "temp"
+
+# ==========================================================
+# News Source Configuration
+# ==========================================================
+
+RSS_URL = "https://news.google.com/rss/search?q=Andhra%20Pradesh%20Telangana%20news&hl=en-IN&gl=IN&ceid=IN:en"
+
+BAD_KEYWORDS = [
+    "stock",
+    "market",
+    "share price",
+    "advertisement",
+    "sponsored",
+    "horoscope",
+    "lottery",
+]
+
+PREFERRED_KEYWORDS = [
+    "andhra pradesh",
+    "telangana",
+    "government",
+    "rain",
+    "alert",
+    "police",
+    "court",
+    "education",
+    "health",
+    "election",
+    "farmers",
+    "weather",
+]
