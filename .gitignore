@@ -12,6 +12,10 @@ venv/
 outputs/
 Assets/news.jpg
 
+# Runtime logs
+logs/
+*.log
+
 # Temporary files
 temp/
 
