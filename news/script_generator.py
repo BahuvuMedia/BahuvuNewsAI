@@ -61,6 +61,29 @@ except ImportError as exc:
     ) from exc
 
 
+try:
+    from news.bulletin_model import (
+        BulletinStatus as CanonicalBulletinStatus,
+        BulletinStory as CanonicalBulletinStory,
+        GraphicCue as CanonicalGraphicCue,
+        GraphicType as CanonicalGraphicType,
+        NewsBulletin as CanonicalNewsBulletin,
+        ProductionMetadata as CanonicalProductionMetadata,
+        ProductionStage as CanonicalProductionStage,
+        ScriptSegment as CanonicalScriptSegment,
+        SegmentStatus as CanonicalSegmentStatus,
+        SegmentType as CanonicalSegmentType,
+        StoryRole as CanonicalStoryRole,
+        VoiceCue as CanonicalVoiceCue,
+        VoiceStyle as CanonicalVoiceStyle,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "Unable to import canonical bulletin models. Run this module from "
+        "the project root using: python -m news.script_generator"
+    ) from exc
+
+
 # =============================================================================
 # MODULE INFORMATION
 # =============================================================================
@@ -1373,6 +1396,368 @@ class ScriptWriter:
             json_path=json_path,
             metadata_path=metadata_path,
         )
+
+
+
+# =============================================================================
+# CANONICAL BULLETIN ADAPTER
+# =============================================================================
+
+
+def _canonical_story_role(role: StoryRole | str) -> CanonicalStoryRole:
+    """Map the script generator story role to the production contract."""
+
+    value = (
+        role.value
+        if isinstance(role, Enum)
+        else normalize_text(role).lower()
+    )
+
+    role_map = {
+        "lead": CanonicalStoryRole.LEAD,
+        "major": CanonicalStoryRole.MAJOR,
+        "standard": CanonicalStoryRole.STANDARD,
+        "brief": CanonicalStoryRole.BRIEF,
+        "closer": CanonicalStoryRole.CLOSER,
+        "backup": CanonicalStoryRole.BACKUP,
+    }
+
+    return role_map.get(
+        value,
+        CanonicalStoryRole.STANDARD,
+    )
+
+
+def _canonical_voice_style(
+    role: StoryRole | str,
+) -> CanonicalVoiceStyle:
+    """Choose a stable voice style from the story's editorial role."""
+
+    canonical_role = _canonical_story_role(role)
+
+    if canonical_role is CanonicalStoryRole.LEAD:
+        return CanonicalVoiceStyle.AUTHORITATIVE
+
+    if canonical_role is CanonicalStoryRole.MAJOR:
+        return CanonicalVoiceStyle.FORMAL
+
+    if canonical_role is CanonicalStoryRole.CLOSER:
+        return CanonicalVoiceStyle.WARM
+
+    return CanonicalVoiceStyle.NEUTRAL
+
+
+def _make_canonical_segment(
+    *,
+    text: str,
+    segment_type: CanonicalSegmentType,
+    order: int,
+    language: str,
+    article_id: str | None = None,
+    headline: str | None = None,
+    voice_style: CanonicalVoiceStyle = CanonicalVoiceStyle.NEUTRAL,
+    graphic_type: CanonicalGraphicType = CanonicalGraphicType.NONE,
+    metadata: Mapping[str, Any] | None = None,
+) -> CanonicalScriptSegment:
+    """Create one canonical production segment."""
+
+    references = [article_id] if article_id else []
+
+    return CanonicalScriptSegment(
+        segment_type=segment_type,
+        text=text,
+        language=language,
+        order=order,
+        status=CanonicalSegmentStatus.READY,
+        voice_cue=CanonicalVoiceCue(
+            language=language,
+            style=voice_style,
+        ),
+        graphic_cue=CanonicalGraphicCue(
+            graphic_type=graphic_type,
+            headline=headline,
+        ),
+        source_references=references,
+        metadata=dict(metadata or {}),
+    )
+
+
+def to_canonical_bulletin(
+    bulletin: Bulletin,
+) -> CanonicalNewsBulletin:
+    """
+    Convert the working script-generator Bulletin into NewsBulletin.
+
+    The generator's deterministic editorial logic remains unchanged.
+    This adapter exposes its result through the canonical production
+    contract used by translation, voice, graphics, video, and publishing.
+    """
+
+    if not isinstance(bulletin, Bulletin):
+        raise TypeError(
+            "bulletin must be an instance of script_generator.Bulletin."
+        )
+
+    language = normalize_text(bulletin.language) or DEFAULT_LANGUAGE
+
+    opening_segments: list[CanonicalScriptSegment] = [
+        _make_canonical_segment(
+            text=bulletin.opening,
+            segment_type=CanonicalSegmentType.OPENING,
+            order=1,
+            language=language,
+            headline=bulletin.title,
+            voice_style=CanonicalVoiceStyle.FORMAL,
+            graphic_type=CanonicalGraphicType.OPENING_CARD,
+            metadata={
+                "legacy_source": "bulletin.opening",
+                "edition": bulletin.edition,
+                "presenter": bulletin.presenter,
+            },
+        )
+    ]
+
+    if bulletin.headlines:
+        opening_segments.append(
+            _make_canonical_segment(
+                text="Here are the top headlines.",
+                segment_type=CanonicalSegmentType.HEADLINES_INTRO,
+                order=2,
+                language=language,
+                headline="TOP HEADLINES",
+                voice_style=CanonicalVoiceStyle.FORMAL,
+                graphic_type=CanonicalGraphicType.HEADLINE_CARD,
+                metadata={
+                    "legacy_source": "bulletin.headlines",
+                },
+            )
+        )
+
+    for headline_index, headline in enumerate(
+        bulletin.headlines,
+        start=3,
+    ):
+        opening_segments.append(
+            _make_canonical_segment(
+                text=headline,
+                segment_type=CanonicalSegmentType.HEADLINE,
+                order=headline_index,
+                language=language,
+                headline=headline,
+                voice_style=CanonicalVoiceStyle.FORMAL,
+                graphic_type=CanonicalGraphicType.HEADLINE_CARD,
+                metadata={
+                    "headline_number": headline_index - 2,
+                },
+            )
+        )
+
+    canonical_stories: list[CanonicalBulletinStory] = []
+    seen_article_ids: set[str] = set()
+    canonical_rank = 1
+
+    for section in sorted(
+        bulletin.sections,
+        key=lambda item: item.sequence,
+    ):
+        for story in sorted(
+            section.stories,
+            key=lambda item: item.sequence,
+        ):
+            article_id = normalize_text(story.article_id)
+
+            if not article_id or article_id in seen_article_ids:
+                continue
+
+            seen_article_ids.add(article_id)
+
+            voice_style = _canonical_voice_style(story.role)
+            story_segments: list[CanonicalScriptSegment] = []
+            segment_order = 1
+
+            if normalize_text(story.anchor_intro):
+                story_segments.append(
+                    _make_canonical_segment(
+                        text=story.anchor_intro,
+                        segment_type=CanonicalSegmentType.STORY_INTRO,
+                        order=segment_order,
+                        language=language,
+                        article_id=article_id,
+                        headline=story.headline,
+                        voice_style=voice_style,
+                        graphic_type=CanonicalGraphicType.HEADLINE_CARD,
+                        metadata={
+                            "section": section.section_type.value,
+                            "legacy_field": "anchor_intro",
+                        },
+                    )
+                )
+                segment_order += 1
+
+            if normalize_text(story.body):
+                story_segments.append(
+                    _make_canonical_segment(
+                        text=story.body,
+                        segment_type=CanonicalSegmentType.STORY_BODY,
+                        order=segment_order,
+                        language=language,
+                        article_id=article_id,
+                        headline=story.headline,
+                        voice_style=voice_style,
+                        graphic_type=CanonicalGraphicType.STORY_CARD,
+                        metadata={
+                            "section": section.section_type.value,
+                            "legacy_field": "body",
+                        },
+                    )
+                )
+                segment_order += 1
+
+            if normalize_text(story.context):
+                story_segments.append(
+                    _make_canonical_segment(
+                        text=story.context,
+                        segment_type=CanonicalSegmentType.CONTEXT,
+                        order=segment_order,
+                        language=language,
+                        article_id=article_id,
+                        headline=story.headline,
+                        voice_style=CanonicalVoiceStyle.FORMAL,
+                        graphic_type=CanonicalGraphicType.STORY_CARD,
+                        metadata={
+                            "section": section.section_type.value,
+                            "legacy_field": "context",
+                        },
+                    )
+                )
+
+            canonical_story = CanonicalBulletinStory(
+                article_id=article_id,
+                rank=canonical_rank,
+                role=_canonical_story_role(story.role),
+                headline=story.headline,
+                summary=story.body or story.context,
+                category=story.category or section.section_type.value,
+                region=story.region or None,
+                language=language,
+                source_name=story.publisher or None,
+                source_url=story.source_url or None,
+                editorial_score=max(
+                    0.0,
+                    min(100.0, float(story.score)),
+                ),
+                confidence=max(
+                    0.0,
+                    min(100.0, float(story.confidence)),
+                ),
+                priority=max(0, 101 - canonical_rank),
+                production_ready=bool(story_segments),
+                segments=story_segments,
+                metadata={
+                    "source_id": story.source_id,
+                    "legacy_sequence": story.sequence,
+                    "legacy_section": section.section_type.value,
+                    "legacy_role": (
+                        story.role.value
+                        if isinstance(story.role, Enum)
+                        else str(story.role)
+                    ),
+                    "published_at": story.published_at,
+                    "legacy_word_count": story.word_count,
+                    "legacy_estimated_seconds": (
+                        story.estimated_seconds
+                    ),
+                    **dict(story.metadata or {}),
+                },
+            )
+
+            canonical_stories.append(canonical_story)
+            canonical_rank += 1
+
+    closing_segments = [
+        _make_canonical_segment(
+            text=bulletin.closing,
+            segment_type=CanonicalSegmentType.CLOSING,
+            order=1,
+            language=language,
+            headline=bulletin.title,
+            voice_style=CanonicalVoiceStyle.WARM,
+            graphic_type=CanonicalGraphicType.CLOSING_CARD,
+            metadata={
+                "legacy_source": "bulletin.closing",
+            },
+        )
+    ]
+
+    production = CanonicalProductionMetadata(
+        channel_name=bulletin.title,
+        edition_name=bulletin.edition,
+        output_directory=str(OUTPUT_DIRECTORY),
+        script_path=str(
+            OUTPUT_DIRECTORY / DEFAULT_JSON_FILENAME
+        ),
+        target_duration_seconds=(
+            bulletin.statistics.estimated_seconds
+        ),
+        metadata={
+            "presenter": bulletin.presenter,
+            "legacy_bulletin_id": bulletin.bulletin_id,
+            "legacy_generated_at": bulletin.generated_at,
+        },
+    )
+
+    production.mark_stage(
+        CanonicalProductionStage.SCRIPTING,
+        completed=True,
+        output_path=str(
+            OUTPUT_DIRECTORY / DEFAULT_JSON_FILENAME
+        ),
+    )
+
+    canonical = CanonicalNewsBulletin(
+        id=bulletin.bulletin_id,
+        title=f"{bulletin.title} - {bulletin.edition}",
+        edition_date=bulletin.bulletin_date,
+        language=language,
+        status=CanonicalBulletinStatus.SCRIPTED,
+        opening_segments=opening_segments,
+        stories=canonical_stories,
+        closing_segments=closing_segments,
+        production=production,
+        metadata={
+            "adapter": "script_generator.to_canonical_bulletin",
+            "legacy_full_script": bulletin.full_script,
+            "legacy_statistics": asdict(bulletin.statistics),
+            **dict(bulletin.metadata or {}),
+        },
+    )
+
+    canonical.build_timeline()
+    return canonical
+
+
+def generate_canonical_bulletin(
+    articles: Sequence[NewsArticle | Mapping[str, Any]],
+    config: ScriptGeneratorConfig | None = None,
+    write_legacy_outputs: bool = True,
+    bulletin_date: date | datetime | str | None = None,
+) -> CanonicalNewsBulletin:
+    """
+    Generate a bulletin and return the canonical production contract.
+
+    Existing text, JSON, and metadata outputs remain available through
+    write_legacy_outputs.
+    """
+
+    legacy_bulletin = generate_bulletin(
+        articles=articles,
+        config=config,
+        write_outputs=write_legacy_outputs,
+        bulletin_date=bulletin_date,
+    )
+
+    return to_canonical_bulletin(legacy_bulletin)
+
 
 
 # =============================================================================
