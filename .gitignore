@@ -24,4 +24,5 @@ temp/
 
 # Windows
 Thumbs.db
-Desktop.ini
+Desktop.inicredentials/
+assets/images/client_secret_*.json
