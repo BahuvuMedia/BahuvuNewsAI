@@ -289,19 +289,236 @@ def intake_handler(
 
     return stories
 
-
 def editorial_handler(
     context: dict[str, Any],
     request: ProductionRequest,
 ) -> Any:
+    """Run the complete Bahuvu editorial selection workflow.
+
+    Workflow:
+        intake
+        -> deduplication
+        -> article scoring
+        -> editorial validation
+        -> story ranking
+        -> selected production stories
+
+    The handler deliberately returns the original NewsArticle objects after
+    enriching them with scoring and validation information. This preserves
+    compatibility with BulletinBuilder and all downstream production stages.
+    """
+
     stories = _as_list(
         _require_context(context, PipelineStage.INTAKE.value)
     )
 
-    # Existing editorial modules expose different domain APIs. The integration
-    # layer preserves prepared story objects when no single aggregate facade is
-    # available yet.
-    return stories
+    if not stories:
+        raise ValueError(
+            "Editorial stage received no stories from production intake."
+        )
+
+    try:
+        from news.article_scorer import score_articles
+        from news.deduplicator import deduplicate_articles
+        from news.editorial_validator import validate_articles
+        from news.models import ArticleStatus
+        from news.story_ranker import rank_stories
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            "The Bahuvu editorial modules could not be loaded."
+        ) from exc
+
+    # ---------------------------------------------------------------------
+    # 1. DEDUPLICATION
+    # ---------------------------------------------------------------------
+
+    deduplication_result = deduplicate_articles(stories)
+    unique_articles = list(deduplication_result.unique_articles)
+
+    if not unique_articles:
+        raise ValueError(
+            "Editorial deduplication removed every incoming story."
+        )
+
+    # ---------------------------------------------------------------------
+    # 2. ARTICLE SCORING
+    # ---------------------------------------------------------------------
+
+    score_results = score_articles(
+        unique_articles,
+        sort_descending=True,
+    )
+
+    score_by_article_id = {
+        str(result.article_id): result
+        for result in score_results
+    }
+
+    # Attach scoring results to their original article objects so the story
+    # ranker receives the complete editorial information.
+    for article in unique_articles:
+        article_id = str(getattr(article, "id", "") or "")
+        score_result = score_by_article_id.get(article_id)
+
+        if score_result is None:
+            continue
+
+        if hasattr(article, "score"):
+            article.score = float(score_result.final_score)
+
+        if hasattr(article, "confidence"):
+            article.confidence = float(score_result.confidence)
+
+        if hasattr(article, "decision"):
+            article.decision = str(
+                getattr(
+                    score_result.decision,
+                    "value",
+                    score_result.decision,
+                )
+            )
+
+        metadata = dict(getattr(article, "metadata", {}) or {})
+        metadata["editorial_score"] = float(
+            score_result.final_score
+        )
+        metadata["base_score"] = float(
+            score_result.base_score
+        )
+        metadata["scoring_confidence"] = float(
+            score_result.confidence
+        )
+        metadata["scoring_decision"] = str(
+            getattr(
+                score_result.decision,
+                "value",
+                score_result.decision,
+            )
+        )
+        metadata["scoring_band"] = str(
+            getattr(
+                score_result.band,
+                "value",
+                score_result.band,
+            )
+        )
+        metadata["scoring_reasons"] = list(
+            score_result.reasons
+        )
+        metadata["scoring_warnings"] = list(
+            score_result.warnings
+        )
+
+        if hasattr(article, "metadata"):
+            article.metadata = metadata
+
+    # ---------------------------------------------------------------------
+    # 3. EDITORIAL VALIDATION
+    # ---------------------------------------------------------------------
+
+    validation_results = validate_articles(
+        unique_articles,
+        score_results=score_results,
+        sort_by_score=True,
+    )
+
+    validation_by_article_id = {
+        str(result.article_id): result
+        for result in validation_results
+    }
+
+    production_ready_articles = []
+
+    for article in unique_articles:
+        article_id = str(getattr(article, "id", "") or "")
+        validation_result = validation_by_article_id.get(
+            article_id
+        )
+
+        if validation_result is None:
+            continue
+
+        metadata = dict(getattr(article, "metadata", {}) or {})
+        metadata["validation_score"] = float(
+            validation_result.score
+        )
+        metadata["validation_confidence"] = float(
+            validation_result.confidence
+        )
+        metadata["validation_decision"] = str(
+            getattr(
+                validation_result.decision,
+                "value",
+                validation_result.decision,
+            )
+        )
+        metadata["validation_valid"] = bool(
+            validation_result.valid
+        )
+        metadata["production_ready"] = bool(
+            validation_result.production_ready
+        )
+        metadata["validation_reasons"] = list(
+            validation_result.reasons
+        )
+        metadata["validation_warnings"] = list(
+            validation_result.warnings
+        )
+        metadata["validation_errors"] = list(
+            validation_result.errors
+        )
+
+        if hasattr(article, "metadata"):
+            article.metadata = metadata
+
+        if validation_result.production_ready:
+            if hasattr(article, "status"):
+                article.status = ArticleStatus.VALIDATED
+
+            production_ready_articles.append(article)
+
+    if not production_ready_articles:
+        raise ValueError(
+            "No stories passed editorial validation for production."
+        )
+
+    # ---------------------------------------------------------------------
+    # 4. STORY RANKING AND BULLETIN SELECTION
+    # ---------------------------------------------------------------------
+
+    ranking_result = rank_stories(
+        production_ready_articles
+    )
+
+    selected_stories = list(
+        ranking_result.selected_stories
+    )
+
+    if not selected_stories:
+        raise ValueError(
+            "Story ranking produced no selected bulletin stories."
+        )
+
+    # Preserve a compact audit trail for the production manifest.
+    context["editorial_audit"] = {
+        "input_articles": len(stories),
+        "unique_articles": deduplication_result.unique_count,
+        "duplicate_articles": deduplication_result.duplicate_count,
+        "scored_articles": len(score_results),
+        "validated_articles": len(validation_results),
+        "production_ready_articles": len(
+            production_ready_articles
+        ),
+        "selected_articles": len(selected_stories),
+        "reserve_articles": len(
+            ranking_result.reserve_stories
+        ),
+        "rejected_articles": len(
+            ranking_result.rejected_stories
+        ),
+    }
+
+    return selected_stories
 
 
 def bulletin_handler(
