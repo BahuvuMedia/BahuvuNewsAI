@@ -357,7 +357,11 @@ def editorial_handler(
     # Attach scoring results to their original article objects so the story
     # ranker receives the complete editorial information.
     for article in unique_articles:
-        article_id = str(getattr(article, "id", "") or "")
+        article_id = str(
+            getattr(article, "article_id", "")
+            or getattr(article, "id", "")
+            or ""
+        )
         score_result = score_by_article_id.get(article_id)
 
         if score_result is None:
@@ -430,7 +434,11 @@ def editorial_handler(
     production_ready_articles = []
 
     for article in unique_articles:
-        article_id = str(getattr(article, "id", "") or "")
+        article_id = str(
+            getattr(article, "article_id", "")
+            or getattr(article, "id", "")
+            or ""
+        )
         validation_result = validation_by_article_id.get(
             article_id
         )
@@ -478,9 +486,69 @@ def editorial_handler(
             production_ready_articles.append(article)
 
     if not production_ready_articles:
-        raise ValueError(
-            "No stories passed editorial validation for production."
+        rejection_details: list[str] = []
+
+        for result in validation_results[:5]:
+            article_identifier = str(
+                getattr(result, "article_id", "unknown")
+            )
+            decision = str(
+                getattr(
+                    getattr(result, "decision", ""),
+                    "value",
+                    getattr(result, "decision", ""),
+                )
+            )
+            score = float(getattr(result, "score", 0.0) or 0.0)
+            confidence = float(
+                getattr(result, "confidence", 0.0) or 0.0
+            )
+
+            reasons = list(
+                getattr(result, "reasons", []) or []
+            )
+            warnings = list(
+                getattr(result, "warnings", []) or []
+            )
+            errors = list(
+                getattr(result, "errors", []) or []
+            )
+
+            messages = [
+                str(value)
+                for value in reasons + warnings + errors
+                if str(value).strip()
+            ]
+
+            valid = bool(
+                getattr(result, "valid", False)
+            )
+            production_ready = bool(
+                getattr(result, "production_ready", False)
+            )
+
+            detail = (
+                f"{article_identifier}: decision={decision}, "
+                f"score={score:.2f}, confidence={confidence:.2f}, "
+                f"valid={valid}, "
+                f"production_ready={production_ready}"
+            )
+
+            if messages:
+                detail += "; " + " | ".join(messages[:8])
+
+            rejection_details.append(detail)
+
+        diagnostic = (
+            " No stories passed editorial validation for production."
         )
+
+        if rejection_details:
+            diagnostic += " Details: " + " || ".join(
+                rejection_details
+            )
+
+        raise ValueError(diagnostic)
 
     # ---------------------------------------------------------------------
     # 4. STORY RANKING AND BULLETIN SELECTION
@@ -974,18 +1042,104 @@ def _run_self_test() -> None:
     assert callable(handlers[PipelineStage.VIDEO])
     assert callable(handlers[PipelineStage.UPLOAD])
 
+    from datetime import datetime, timezone
+
+    from news.models import (
+        ArticleStatus,
+        LanguageCode,
+        NewsArticle,
+        NewsCategory,
+    )
+
+    strong_content = """
+    The Andhra Pradesh government issued a weather alert after heavy rain
+    affected several districts. Officials said emergency teams were deployed
+    and local administrations were instructed to monitor reservoirs, roads,
+    drainage systems, and low-lying residential areas.
+
+    The India Meteorological Department forecast further rainfall during the
+    next twenty-four hours. District authorities advised residents to avoid
+    flooded roads, follow official warnings, and report local emergencies to
+    control rooms established in affected areas.
+
+    Electricity, municipal, irrigation, and disaster-response teams began
+    responding to local reports. Farmers were advised to protect harvested
+    crops, livestock, agricultural equipment, and stored produce from
+    continuing rain and possible waterlogging.
+
+    Officials said the situation remained under observation and confirmed
+    that additional response teams would be deployed if conditions worsened.
+    Authorities also said reservoir levels, transport routes, and vulnerable
+    communities would continue to be monitored.
+    """
+
+    sample_article = NewsArticle(
+        article_id="story_001",
+        title=(
+            "Heavy Rain Alert Issued Across Andhra Pradesh "
+            "as Officials Deploy Emergency Teams"
+        ),
+        url=(
+            "https://www.thehindu.com/news/national/"
+            "andhra-pradesh/weather-alert"
+        ),
+        source_id="the_hindu_integration_test",
+        source_name="The Hindu",
+        publisher="The Hindu",
+        author="Staff Reporter",
+        status=ArticleStatus.COLLECTED,
+        category=NewsCategory.WEATHER,
+        language=LanguageCode.ENGLISH,
+        description=(
+            "Authorities placed several districts on alert as heavy "
+            "rainfall continued across Andhra Pradesh."
+        ),
+        raw_text=strong_content,
+        cleaned_text=strong_content,
+        summary=(
+            "Authorities placed several districts on alert as heavy "
+            "rainfall continued across Andhra Pradesh."
+        ),
+        image_url=(
+            "https://images.example.org/rain-alert.jpg"
+        ),
+        canonical_url=(
+            "https://www.thehindu.com/news/national/"
+            "andhra-pradesh/weather-alert"
+        ),
+        published_at=datetime.now(timezone.utc),
+        reliability_score=95.0,
+        relevance_score=94.0,
+        importance_score=92.0,
+        editorial_score=91.0,
+        tags=[
+            "weather",
+            "andhra pradesh",
+            "heavy rain",
+            "emergency",
+        ],
+        keywords=[
+            "Andhra Pradesh",
+            "heavy rain",
+            "weather alert",
+            "emergency teams",
+            "IMD",
+        ],
+        metadata={
+            "integration_test": True,
+            "country": "India",
+            "region": "Andhra Pradesh",
+            "location": "Andhra Pradesh, India",
+            "source_reliability": 95.0,
+            "duplicate": False,
+            "duplicate_score": 0.10,
+        },
+    )
+
     request = ProductionRequest(
         production_id="bahuvu_integration_demo",
         mode=ProductionMode.DRY_RUN,
-        stories=[
-            {
-                "story_id": "story_001",
-                "order": 1,
-                "headline": "Sample Headline",
-                "body": "Sample story body.",
-                "language": "te",
-            }
-        ],
+        stories=[sample_article],
     )
 
     context: dict[str, Any] = {

@@ -413,6 +413,8 @@ class ArticleView:
         ),
         "content": (
             "content",
+            "cleaned_text",
+            "raw_text",
             "body",
             "article_text",
             "text",
@@ -503,6 +505,7 @@ class ArticleView:
         ),
         "source_score": (
             "source_score",
+            "reliability_score",
             "credibility_score",
             "source_credibility",
             "trust_score",

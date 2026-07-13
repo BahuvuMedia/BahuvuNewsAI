@@ -479,6 +479,8 @@ class ArticleView:
         ),
         "content": (
             "content",
+            "cleaned_text",
+            "raw_text",
             "body",
             "article_text",
             "text",

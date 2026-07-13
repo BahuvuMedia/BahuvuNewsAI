@@ -98,6 +98,20 @@ class StoryRankerConfig:
     max_stories: int = DEFAULT_MAX_STORIES
     minimum_score: float = DEFAULT_MINIMUM_SCORE
     max_per_category: int = DEFAULT_MAX_PER_CATEGORY
+    max_per_source: int = 3
+
+    # Editorial slot order used to build a balanced television bulletin.
+    # Each inner tuple represents interchangeable preferred categories.
+    editorial_slots: tuple[tuple[str, ...], ...] = (
+        ("national", "politics", "governance", "law"),
+        ("state", "local", "andhra_pradesh", "telangana"),
+        ("international", "world"),
+        ("business", "economy", "agriculture"),
+        ("technology", "science", "education", "health"),
+        ("sports",),
+        ("weather", "disaster", "environment"),
+        ("culture", "entertainment"),
+    )
 
     category_diversity_bonus: float = DEFAULT_CATEGORY_DIVERSITY_BONUS
     recency_bonus: float = DEFAULT_RECENCY_BONUS
@@ -118,6 +132,18 @@ class StoryRankerConfig:
 
         if self.max_per_category < 1:
             raise ValueError("max_per_category must be at least 1.")
+
+        if self.max_per_source < 1:
+            raise ValueError("max_per_source must be at least 1.")
+
+        if not self.editorial_slots:
+            raise ValueError("editorial_slots cannot be empty.")
+
+        for slot in self.editorial_slots:
+            if not slot:
+                raise ValueError(
+                    "Every editorial slot must contain a category."
+                )
 
         if self.minimum_confidence < 0:
             raise ValueError("minimum_confidence cannot be negative.")
@@ -629,75 +655,198 @@ class StoryRanker:
         self,
         ranked_candidates: list[RankedStory],
     ) -> None:
-        """Select stories while maintaining category diversity."""
+        """Build a balanced bulletin while preserving editorial ranking.
 
-        selected_count = 0
+        Selection happens in two passes:
+
+        1. Fill preferred editorial slots with the strongest eligible story.
+        2. Fill remaining bulletin capacity using overall ranking score.
+
+        Existing category limits remain active, and a source limit prevents
+        one publisher from dominating the bulletin.
+        """
+
         category_counts: dict[str, int] = defaultdict(int)
+        source_counts: dict[str, int] = defaultdict(int)
         seen_categories: set[str] = set()
+        selected_items: list[RankedStory] = []
 
-        for rank_position, item in enumerate(ranked_candidates, start=1):
+        for rank_position, item in enumerate(
+            ranked_candidates,
+            start=1,
+        ):
             item.rank = rank_position
+            item.selected = False
+            item.decision = RankingDecision.RESERVE
 
-            diversity_bonus = 0.0
-
-            if item.category not in seen_categories:
-                diversity_bonus = self.config.category_diversity_bonus
-                item.final_score = round(
-                    min(100.0, item.final_score + diversity_bonus),
-                    2,
-                )
-                item.bonuses["category_diversity"] = diversity_bonus
-                item.reasons.append("category_diversity")
-
-            category_limit_reached = (
-                category_counts[item.category]
-                >= self.config.max_per_category
+        def normalized(value: str) -> str:
+            return (
+                value.strip()
+                .lower()
+                .replace("-", "_")
+                .replace(" ", "_")
             )
 
-            bulletin_full = selected_count >= self.config.max_stories
+        def can_select(item: RankedStory) -> bool:
+            if len(selected_items) >= self.config.max_stories:
+                return False
 
-            if category_limit_reached:
-                item.decision = RankingDecision.RESERVE
-                item.reasons.append("category_limit_reached")
-                continue
+            category_key = normalized(item.category or "other")
+            source_key = normalized(item.source_name or "unknown")
 
-            if bulletin_full:
-                item.decision = RankingDecision.RESERVE
-                item.reasons.append("bulletin_capacity_reached")
-                continue
+            if (
+                category_counts[category_key]
+                >= self.config.max_per_category
+            ):
+                return False
+
+            if (
+                source_counts[source_key]
+                >= self.config.max_per_source
+            ):
+                return False
+
+            return True
+
+        def select_item(
+            item: RankedStory,
+            reason: str,
+        ) -> None:
+            category_key = normalized(item.category or "other")
+            source_key = normalized(item.source_name or "unknown")
+
+            if category_key not in seen_categories:
+                diversity_bonus = (
+                    self.config.category_diversity_bonus
+                )
+                item.final_score = round(
+                    min(
+                        100.0,
+                        item.final_score + diversity_bonus,
+                    ),
+                    2,
+                )
+                item.bonuses[
+                    "category_diversity"
+                ] = diversity_bonus
+                item.reasons.append("category_diversity")
 
             item.decision = RankingDecision.SELECT
             item.selected = True
             item.band = assign_band(item.final_score)
+            item.reasons.append(reason)
+
+            selected_items.append(item)
+            category_counts[category_key] += 1
+            source_counts[source_key] += 1
+            seen_categories.add(category_key)
+
+        # -----------------------------------------------------------------
+        # PASS 1: Fill the preferred newsroom slots.
+        # -----------------------------------------------------------------
+
+        for slot_number, slot_categories in enumerate(
+            self.config.editorial_slots,
+            start=1,
+        ):
+            if len(selected_items) >= self.config.max_stories:
+                break
+
+            preferred = {
+                normalized(category)
+                for category in slot_categories
+            }
+
+            candidate = next(
+                (
+                    item
+                    for item in ranked_candidates
+                    if (
+                        not item.selected
+                        and normalized(
+                            item.category or "other"
+                        ) in preferred
+                        and can_select(item)
+                    )
+                ),
+                None,
+            )
+
+            if candidate is not None:
+                select_item(
+                    candidate,
+                    f"editorial_slot:{slot_number}",
+                )
+
+        # -----------------------------------------------------------------
+        # PASS 2: Fill remaining capacity by score.
+        # -----------------------------------------------------------------
+
+        for item in ranked_candidates:
+            if len(selected_items) >= self.config.max_stories:
+                break
+
+            if item.selected:
+                continue
+
+            if can_select(item):
+                select_item(
+                    item,
+                    "score_based_capacity_fill",
+                )
+
+        # -----------------------------------------------------------------
+        # Explain why unselected stories remain in reserve.
+        # -----------------------------------------------------------------
+
+        for item in ranked_candidates:
+            if item.selected:
+                continue
+
+            category_key = normalized(item.category or "other")
+            source_key = normalized(item.source_name or "unknown")
+
+            if (
+                category_counts[category_key]
+                >= self.config.max_per_category
+            ):
+                item.reasons.append("category_limit_reached")
+            elif (
+                source_counts[source_key]
+                >= self.config.max_per_source
+            ):
+                item.reasons.append("source_limit_reached")
+            elif len(selected_items) >= self.config.max_stories:
+                item.reasons.append("bulletin_capacity_reached")
+            else:
+                item.reasons.append("not_selected_for_bulletin_balance")
+
+            item.decision = RankingDecision.RESERVE
+
+        # The slot order is the final broadcast order. Stories used to fill
+        # remaining capacity retain their original score order.
+        for final_rank, item in enumerate(
+            selected_items,
+            start=1,
+        ):
+            item.rank = final_rank
+
+            metadata = dict(
+                getattr(item.article, "metadata", {}) or {}
+            )
+            metadata["ranking_score"] = item.final_score
+            metadata["ranking_position"] = final_rank
+            metadata["ranking_decision"] = item.decision.value
+            metadata["ranking_reasons"] = list(item.reasons)
+            metadata["bulletin_category"] = normalized(
+                item.category or "other"
+            )
+            metadata["bulletin_source_position"] = source_counts[
+                normalized(item.source_name or "unknown")
+            ]
 
             item.article.status = ArticleStatus.SELECTED
-            item.article.metadata["ranking_score"] = item.final_score
-            item.article.metadata["ranking_position"] = selected_count + 1
-            item.article.metadata["ranking_decision"] = item.decision.value
-            item.article.metadata["ranking_reasons"] = list(item.reasons)
-
-            selected_count += 1
-            category_counts[item.category] += 1
-            seen_categories.add(item.category)
-
-        selected_items = [
-            item
-            for item in ranked_candidates
-            if item.selected
-        ]
-
-        selected_items.sort(
-            key=lambda item: (
-                item.final_score,
-                item.confidence,
-                item.article_id,
-            ),
-            reverse=True,
-        )
-
-        for final_rank, item in enumerate(selected_items, start=1):
-            item.rank = final_rank
-            item.article.metadata["ranking_position"] = final_rank
+            item.article.metadata = metadata
 
         reserve_items = [
             item
@@ -924,6 +1073,7 @@ def run_self_test() -> None:
         max_stories=5,
         minimum_score=50.0,
         max_per_category=2,
+        max_per_source=5,
         minimum_confidence=50.0,
     )
 
