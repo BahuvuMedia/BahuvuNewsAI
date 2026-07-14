@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -24,5 +24,9 @@ temp/
 
 # Windows
 Thumbs.db
-Desktop.inicredentials/
+Desktop.ini
+
+# Local OAuth credentials
+credentials/
 assets/images/client_secret_*.json
+
