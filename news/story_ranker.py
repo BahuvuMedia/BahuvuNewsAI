@@ -364,19 +364,34 @@ def article_source_name(
         or getattr(article, "publisher", "")
     )
 
-
 def calculate_base_score(
     article: NewsArticle | Mapping[str, Any],
 ) -> float:
     """
-    Calculate the base editorial score from canonical NewsArticle fields.
+    Calculate the ranking base score.
 
-    Weighting:
-    - editorial_score: 40%
-    - importance_score: 25%
-    - relevance_score: 20%
-    - reliability_score: 15%
+    Live production articles are scored by article_scorer before reaching
+    this module. Prefer that audited scorer result when it is available.
+
+    Canonical component scores remain the fallback for standalone use and
+    deterministic self-tests.
     """
+
+    metadata = article_metadata(article)
+
+    scorer_final_score = safe_float(
+        metadata.get("editorial_score")
+    )
+
+    if scorer_final_score > 0.0:
+        return round(scorer_final_score, 2)
+
+    scorer_base_score = safe_float(
+        metadata.get("base_score")
+    )
+
+    if scorer_base_score > 0.0:
+        return round(scorer_base_score, 2)
 
     if isinstance(article, Mapping):
         editorial = safe_float(article.get("editorial_score"))
@@ -384,10 +399,18 @@ def calculate_base_score(
         relevance = safe_float(article.get("relevance_score"))
         reliability = safe_float(article.get("reliability_score"))
     else:
-        editorial = safe_float(getattr(article, "editorial_score", 0.0))
-        importance = safe_float(getattr(article, "importance_score", 0.0))
-        relevance = safe_float(getattr(article, "relevance_score", 0.0))
-        reliability = safe_float(getattr(article, "reliability_score", 0.0))
+        editorial = safe_float(
+            getattr(article, "editorial_score", 0.0)
+        )
+        importance = safe_float(
+            getattr(article, "importance_score", 0.0)
+        )
+        relevance = safe_float(
+            getattr(article, "relevance_score", 0.0)
+        )
+        reliability = safe_float(
+            getattr(article, "reliability_score", 0.0)
+        )
 
     score = (
         editorial * 0.40
@@ -402,7 +425,21 @@ def calculate_base_score(
 def calculate_confidence(
     article: NewsArticle | Mapping[str, Any],
 ) -> float:
-    """Use reliability as the ranking confidence score."""
+    """
+    Return ranking confidence.
+
+    Prefer article_scorer's audited confidence for live production articles,
+    then fall back to the canonical reliability score.
+    """
+
+    metadata = article_metadata(article)
+
+    scorer_confidence = safe_float(
+        metadata.get("scoring_confidence")
+    )
+
+    if scorer_confidence > 0.0:
+        return round(scorer_confidence, 2)
 
     value = (
         article.get("reliability_score", 0.0)
@@ -411,6 +448,7 @@ def calculate_confidence(
     )
 
     return round(safe_float(value), 2)
+
 
 
 def is_duplicate(article: NewsArticle | Mapping[str, Any]) -> bool:
