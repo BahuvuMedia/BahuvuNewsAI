@@ -43,8 +43,8 @@ __all__ = [
     "TranslatorFactoryConfiguration",
     "create_translation_backend",
     "create_telugu_translator",
+    "create_translator",
 ]
-
 
 MODULE_NAME = "BahuvuNewsAI Telugu translator factory"
 MODULE_VERSION = "1.0.0"
@@ -268,6 +268,17 @@ def create_telugu_translator(
         settings=resolved_settings,
     )
 
+def create_translator(
+    configuration: TranslatorFactoryConfiguration | None = None,
+    *,
+    settings: TranslationSettings | None = None,
+) -> TeluguTranslator:
+    """Compatibility alias used by production integrations."""
+
+    return create_telugu_translator(
+        configuration,
+        settings=settings,
+    )
 
 def _backend_name(backend: Any) -> str:
     """Return a stable backend identifier for diagnostics."""
