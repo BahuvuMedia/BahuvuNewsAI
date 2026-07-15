@@ -665,7 +665,6 @@ def polish_handler(
 
     return polisher.polish(script)
 
-
 def translate_handler(
     context: dict[str, Any],
     request: ProductionRequest,
@@ -676,11 +675,11 @@ def translate_handler(
     )
 
     try:
-        from news.telugu_translator import TeluguTranslator  # type: ignore
+        from news.translator_factory import create_translator
     except (ImportError, AttributeError):
         return polished
 
-    translator = TeluguTranslator()
+    translator = create_translator()
 
     for method_name in (
         "translate",
