@@ -629,11 +629,13 @@ def script_handler(
     )
 
     try:
-        from news.script_generator import ScriptGenerator  # type: ignore
+        from news.script_generator_factory import (
+            create_script_generator,
+        )
     except (ImportError, AttributeError):
         return bulletin
 
-    generator = ScriptGenerator()
+    generator = create_script_generator()
 
     for method_name in (
         "generate",
@@ -641,11 +643,15 @@ def script_handler(
         "build",
     ):
         method = getattr(generator, method_name, None)
+
         if callable(method):
-            return method(bulletin)
+            try:
+                return method(bulletin)
+            except TypeError:
+                continue
 
     return bulletin
-
+  
 
 def polish_handler(
     context: dict[str, Any],
