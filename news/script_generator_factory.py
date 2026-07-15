@@ -362,20 +362,83 @@ class UnifiedAIScriptGenerator:
         if not enhanced_script.endswith("\n"):
             enhanced_script += "\n"
 
-        if self.factory_config.replace_full_script:
+        enhanced_word_count = count_words(enhanced_script)
+
+        provider_name = str(result.provider or "").strip().casefold()
+        offline_result = (
+            bool(result.used_fallback)
+            or provider_name == "offline"
+        )
+
+        minimum_acceptable_words = max(
+            1,
+            int(original_word_count * 0.70),
+        )
+
+        prompt_leak_markers = (
+            "you are the senior english broadcast editor",
+            "mandatory rules:",
+            "improve the following deterministic news bulletin",
+        )
+
+        normalized_enhanced_script = enhanced_script.casefold()
+
+        prompt_leak_detected = any(
+            marker in normalized_enhanced_script
+            for marker in prompt_leak_markers
+        )
+
+        enhanced_script_is_complete = (
+            enhanced_word_count >= minimum_acceptable_words
+            and not prompt_leak_detected
+        )
+
+        replacement_applied = (
+            self.factory_config.replace_full_script
+            and not offline_result
+            and enhanced_script_is_complete
+        )
+
+        replacement_reason = ""
+
+        if replacement_applied:
             bulletin.full_script = enhanced_script
 
-            total_words = count_words(enhanced_script)
             total_seconds = estimate_seconds(
-                total_words,
+                enhanced_word_count,
                 self.script_config.words_per_minute,
             )
 
-            bulletin.statistics.total_words = total_words
+            bulletin.statistics.total_words = enhanced_word_count
             bulletin.statistics.estimated_seconds = total_seconds
             bulletin.statistics.estimated_minutes = round(
                 total_seconds / 60.0,
                 2,
+            )
+
+        elif offline_result:
+            replacement_reason = (
+                "Deterministic script preserved because offline fallback "
+                "handled AI script generation."
+            )
+
+        elif prompt_leak_detected:
+            replacement_reason = (
+                "Deterministic script preserved because AI instructions "
+                "were detected in the generated output."
+            )
+
+        elif enhanced_word_count < minimum_acceptable_words:
+            replacement_reason = (
+                "Deterministic script preserved because the AI result was "
+                f"too short ({enhanced_word_count} words; minimum required "
+                f"{minimum_acceptable_words})."
+            )
+
+        else:
+            replacement_reason = (
+                "Deterministic script preserved because full-script "
+                "replacement is disabled."
             )
 
         bulletin.metadata = dict(bulletin.metadata or {})
@@ -387,9 +450,15 @@ class UnifiedAIScriptGenerator:
             "routing_attempts": result.routing_attempts,
             "request_id": result.request_id,
             "created_at": result.created_at,
-            "replace_full_script": (
+            "replace_full_script_requested": (
                 self.factory_config.replace_full_script
             ),
+            "replace_full_script": replacement_applied,
+            "replacement_applied": replacement_applied,
+            "replacement_reason": replacement_reason,
+            "enhanced_word_count": enhanced_word_count,
+            "minimum_acceptable_words": minimum_acceptable_words,
+            "prompt_leak_detected": prompt_leak_detected,
             "deterministic_word_count": original_word_count,
             "deterministic_estimated_seconds": original_duration,
             "final_word_count": bulletin.statistics.total_words,
