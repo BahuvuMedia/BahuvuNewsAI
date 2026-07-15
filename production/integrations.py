@@ -367,11 +367,20 @@ def editorial_handler(
         if score_result is None:
             continue
 
+        final_score = float(score_result.final_score)
+        scoring_confidence = float(score_result.confidence)
+
+        # Keep both legacy and canonical score fields synchronized.
+        # NewsArticle uses editorial_score, while some compatibility
+        # models may expose score directly.
+        if hasattr(article, "editorial_score"):
+            article.editorial_score = final_score
+
         if hasattr(article, "score"):
-            article.score = float(score_result.final_score)
+            article.score = final_score
 
         if hasattr(article, "confidence"):
-            article.confidence = float(score_result.confidence)
+            article.confidence = scoring_confidence
 
         if hasattr(article, "decision"):
             article.decision = str(
@@ -632,26 +641,47 @@ def script_handler(
         from news.script_generator_factory import (
             create_script_generator,
         )
-    except (ImportError, AttributeError):
-        return bulletin
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            "The Bahuvu script-generator factory could not be loaded."
+        ) from exc
+
+    # The script generator accepts a sequence of NewsArticle objects or
+    # article mappings. The bulletin stage returns a wrapper containing
+    # those stories, so extract them before invoking the generator.
+    bulletin_mapping = _mapping(bulletin)
+
+    stories = bulletin_mapping.get("stories")
+
+    if stories is None and hasattr(bulletin, "stories"):
+        stories = getattr(bulletin, "stories")
+
+    article_values = _as_list(stories)
+
+    if not article_values:
+        raise ValueError(
+            "The bulletin contains no stories for script generation."
+        )
 
     generator = create_script_generator()
 
-    for method_name in (
-        "generate",
-        "generate_script",
-        "build",
-    ):
-        method = getattr(generator, method_name, None)
+    try:
+        generate_method = getattr(generator, "generate", None)
 
-        if callable(method):
-            try:
-                return method(bulletin)
-            except TypeError:
-                continue
+        if not callable(generate_method):
+            raise TypeError(
+                "The configured script generator has no callable "
+                "'generate' method."
+            )
 
-    return bulletin
-  
+        return generate_method(article_values)
+
+    finally:
+        close_method = getattr(generator, "close", None)
+
+        if callable(close_method):
+            close_method()
+
 
 def polish_handler(
     context: dict[str, Any],
