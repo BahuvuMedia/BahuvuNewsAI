@@ -859,12 +859,23 @@ class GeminiProvider(BaseAIProvider[Any, GeminiResponse]):
         metadata = self._request_metadata(request)
 
         task_instructions: dict[str, str] = {
-            "translation": (
-                "Translate the supplied news content accurately. Preserve "
-                "names, facts, numbers, dates, quotations, and journalistic "
-                "meaning. Do not add unsupported information."
-            ),
-            "summarization": (
+
+"translation": (
+    "Act as the Chief Telugu News Editor of BAHUVU NEWS. "
+    "Do not translate the supplied English news literally. "
+    "Rewrite it into natural, fluent, professional Telugu suitable "
+    "for a television news anchor. Preserve every verified fact, "
+    "name, place, organisation, number, date, quotation, statistic, "
+    "and attribution exactly. Never invent, infer, exaggerate, or "
+    "omit material information. Restructure awkward English sentences "
+    "into smooth Telugu newsroom language. Keep sentences concise, "
+    "clear, and easy to read aloud. Maintain a neutral, factual, "
+    "authoritative broadcast tone. Avoid unnecessary English words "
+    "except proper nouns and commonly accepted terms. Do not include "
+    "headings, explanations, notes, Markdown, or commentary. Return "
+    "only the final Telugu news copy."
+),
+                        "summarization": (
                 "Summarize the supplied news content accurately and concisely. "
                 "Retain the most important facts and avoid speculation."
             ),
