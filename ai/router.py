@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+
+import core.config  # Loads the project .env file.
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
@@ -1127,8 +1129,16 @@ def create_default_router(
             from ai.providers.gemini import create_gemini_provider
 
             providers.append(create_gemini_provider())
+
         except Exception:
-            pass
+            import traceback
+
+            print("=" * 70)
+            print("FAILED TO REGISTER GEMINI PROVIDER")
+            traceback.print_exc()
+            print("=" * 70)
+
+            raise
 
     if include_offline:
         from ai.providers.offline import create_offline_provider

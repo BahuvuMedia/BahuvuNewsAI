@@ -98,34 +98,478 @@ def _require_context(context: Mapping[str, Any], key: str) -> Any:
     return context[key]
 
 
-def _extract_output_path(value: Any) -> Path | None:
-    if value is None:
-        return None
+def _bulletin_to_polisher_input(bulletin: Any) -> Any:
+    """Convert a generated Bulletin into EditorialPolisher input.
 
-    if isinstance(value, Path):
-        return value
+    The script generator returns a structured Bulletin containing title,
+    opening, sections, segments, closing, and full_script. The editorial
+    polisher expects headline, intro, body, closing, language, and metadata.
 
-    mapping = _mapping(value)
-    for key in (
-        "output_path",
-        "bulletin_audio_path",
-        "path",
-        "video_path",
-        "thumbnail_path",
+    This adapter preserves the structured bulletin while assembling only the
+    central bulletin content into the body, avoiding duplicated opening and
+    closing text.
+    """
+
+    from news.editorial_polisher import PolishedScriptInput
+
+    mapping = _mapping(bulletin)
+
+    title = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "headline",
+                "title",
+            ),
+        )
+        or "BAHUVU NEWS"
+    )
+
+    opening = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "intro",
+                "opening",
+                "lead",
+            ),
+        )
+        or ""
+    )
+
+    closing = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "closing",
+                "outro",
+                "signoff",
+            ),
+        )
+        or ""
+    )
+
+    language = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "language",
+                "language_code",
+            ),
+        )
+        or "en"
+    )
+
+    bulletin_id = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "bulletin_id",
+                "script_id",
+                "id",
+            ),
+        )
+        or ""
+    )
+
+    body_parts: list[str] = []
+
+    headlines = _as_list(mapping.get("headlines"))
+
+    if headlines:
+        body_parts.append("TOP HEADLINES")
+
+        for index, headline in enumerate(headlines, start=1):
+            headline_text = _safe_text(headline).strip()
+
+            if headline_text:
+                body_parts.append(f"{index}. {headline_text}")
+
+    sections = _as_list(mapping.get("sections"))
+
+    for section in sections:
+        section_mapping = _mapping(section)
+
+        section_title = _safe_text(
+            _first_nonempty(
+                section_mapping,
+                (
+                    "title",
+                    "section_title",
+                    "section_type",
+                ),
+            )
+            or ""
+        ).strip()
+
+        if section_title:
+            body_parts.append(section_title.upper())
+
+        segments = _as_list(section_mapping.get("segments"))
+
+        if segments:
+            ordered_segments = sorted(
+                segments,
+                key=lambda item: int(
+                    _mapping(item).get("sequence") or 0
+                ),
+            )
+
+            for segment in ordered_segments:
+                segment_mapping = _mapping(segment)
+                text = _safe_text(
+                    _first_nonempty(
+                        segment_mapping,
+                        (
+                            "text",
+                            "body",
+                            "content",
+                            "narration",
+                        ),
+                    )
+                    or ""
+                ).strip()
+
+                if text:
+                    body_parts.append(text)
+
+            continue
+
+        stories = _as_list(section_mapping.get("stories"))
+
+        for story in stories:
+            story_mapping = _mapping(story)
+
+            for field_name in (
+                "anchor_intro",
+                "body",
+                "context",
+            ):
+                text = _safe_text(
+                    story_mapping.get(field_name)
+                ).strip()
+
+                if text:
+                    body_parts.append(text)
+
+    body = "\n\n".join(
+        part.strip()
+        for part in body_parts
+        if part and part.strip()
+    )
+
+    if not body:
+        full_script = _safe_text(
+            mapping.get("full_script")
+        ).strip()
+
+        if full_script:
+            body = full_script
+
+            if opening and body.startswith(opening):
+                body = body[len(opening):].strip()
+
+            if closing and body.endswith(closing):
+                body = body[:-len(closing)].strip()
+
+    if not body:
+        raise ValueError(
+            "The generated bulletin could not be converted into a "
+            "non-empty editorial script body."
+        )
+
+    metadata = dict(mapping.get("metadata") or {})
+    metadata["bulletin_adapter"] = {
+        "source_type": type(bulletin).__name__,
+        "source_bulletin_id": bulletin_id,
+        "headlines_preserved": len(headlines),
+        "sections_preserved": len(sections),
+        "body_character_count": len(body),
+        "structured_conversion": bool(sections),
+    }
+
+    return PolishedScriptInput(
+        headline=title,
+        intro=opening,
+        body=body,
+        closing=closing,
+        language=language,
+        source_script_id=bulletin_id,
+        metadata=metadata,
+    )
+
+def _remove_newsroom_boilerplate(value: str) -> str:
+    """Remove known publisher subscription and navigation boilerplate."""
+
+    markers = (
+        "subscribed with another email",
+        "logout and login",
+        "account subscription benefits",
+        "premium stories",
+        "unlock these with subscription",
+        "the view from india",
+        "first day first show",
+        "today's cache",
+        "your download of the top 5 technology stories",
+        "science for",
+    )
+
+    cleaned_parts: list[str] = []
+
+    for part in value.split("\n\n"):
+        normalized = part.strip()
+
+        prefix, separator, remainder = normalized.partition(" ")
+
+        if (
+            separator
+            and prefix.endswith(".")
+            and prefix[:-1].isdigit()
+        ):
+            normalized = remainder.strip()
+
+        lowered = normalized.casefold()
+
+        if not normalized:
+            continue
+
+        if any(marker in lowered for marker in markers):
+            continue
+
+        cleaned_parts.append(normalized)
+
+    return "\n\n".join(cleaned_parts)
+
+
+def _translate_polishing_result(polished: Any) -> Any:
+    """Translate a PolishingResult into a Telugu PolishedScript.
+
+    The editorial stage returns PolishingResult, while the Telugu translation
+    backend accepts TranslationRequest. This adapter translates the headline,
+    intro, body, and closing, validates the output, preserves editorial
+    metadata, and refuses to silently pass English through.
+    """
+
+    from news.editorial_polisher import PolishedScript
+    from news.telugu_translator import TranslationRequest
+    from news.translator_factory import create_translator
+
+    polished_mapping = _mapping(polished)
+
+    script_value = polished_mapping.get("script")
+
+    if script_value is None and hasattr(polished, "script"):
+        script_value = getattr(polished, "script")
+
+    script_mapping = _mapping(script_value)
+
+    if not script_mapping:
+        raise ValueError(
+            "Translation stage received no polished script."
+        )
+
+    headline = _safe_text(
+        script_mapping.get("headline")
+    ).strip()
+
+    intro = _safe_text(
+        script_mapping.get("intro")
+    ).strip()
+
+    body = _remove_newsroom_boilerplate(
+        _safe_text(
+            script_mapping.get("body")
+        ).strip()
+    )
+
+    closing = _safe_text(
+        script_mapping.get("closing")
+    ).strip()
+
+    source_script_id = _safe_text(
+        script_mapping.get("source_script_id")
+    ).strip()
+
+    if not headline:
+        raise ValueError(
+            "Translation stage received an empty headline."
+        )
+
+    if not body:
+        raise ValueError(
+            "Translation stage received an empty script body."
+        )
+
+    translator = create_translator()
+
+    backend = getattr(translator, "backend", None)
+    validator = getattr(translator, "validator", None)
+
+    if backend is None or not callable(
+        getattr(backend, "translate", None)
     ):
-        candidate = mapping.get(key)
-        if candidate:
-            return Path(str(candidate))
+        raise RuntimeError(
+            "The configured Telugu translator does not expose a "
+            "callable translation backend."
+        )
 
-    artifact = mapping.get("artifact")
-    if artifact:
-        artifact_mapping = _mapping(artifact)
-        candidate = artifact_mapping.get("path")
-        if candidate:
-            return Path(str(candidate))
+    main_request = TranslationRequest(
+        article_id=source_script_id or "bahuvu_bulletin",
+        headline=headline,
+        summary=intro,
+        script=body,
+        category="news bulletin",
+        publisher="BAHUVU NEWS",
+        source_name="BAHUVU NEWS",
+        published_at="",
+        keywords=(),
+        style=(
+            "natural professional Telugu television news; preserve all "
+            "facts, names, numbers and section order; avoid literal or "
+            "mechanical translation"
+        ),
+    )
 
-    return None
+    main_result = backend.translate(main_request)
 
+    if validator is not None and callable(
+        getattr(validator, "validate", None)
+    ):
+        main_warnings = validator.validate(
+            main_request,
+            main_result,
+        )
+    else:
+        main_warnings = list(
+            getattr(main_result, "warnings", []) or []
+        )
+
+    translated_closing = ""
+
+    if closing:
+        closing_request = TranslationRequest(
+            article_id=(
+                f"{source_script_id}_closing"
+                if source_script_id
+                else "bahuvu_bulletin_closing"
+            ),
+            headline="BAHUVU NEWS",
+            summary=closing,
+            script=closing,
+            category="news bulletin closing",
+            publisher="BAHUVU NEWS",
+            source_name="BAHUVU NEWS",
+            published_at="",
+            keywords=(),
+            style=(
+                "natural professional Telugu television news closing; "
+                "warm, concise and suitable for an anchor"
+            ),
+        )
+
+        closing_result = backend.translate(closing_request)
+
+        if validator is not None and callable(
+            getattr(validator, "validate", None)
+        ):
+            closing_warnings = validator.validate(
+                closing_request,
+                closing_result,
+            )
+        else:
+            closing_warnings = list(
+                getattr(closing_result, "warnings", []) or []
+            )
+
+        translated_closing = _safe_text(
+            getattr(closing_result, "telugu_script", "")
+        ).strip()
+    else:
+        closing_result = None
+        closing_warnings = []
+
+    translated_headline = _safe_text(
+        getattr(main_result, "telugu_headline", "")
+    ).strip()
+
+    translated_intro = _safe_text(
+        getattr(main_result, "telugu_summary", "")
+    ).strip()
+
+    translated_body = _safe_text(
+        getattr(main_result, "telugu_script", "")
+    ).strip()
+
+    if not translated_headline:
+        raise ValueError(
+            "Telugu translation produced an empty headline."
+        )
+
+    if not translated_body:
+        raise ValueError(
+            "Telugu translation produced an empty body."
+        )
+
+    telugu_character_count = sum(
+        1
+        for character in (
+            translated_headline
+            + translated_intro
+            + translated_body
+            + translated_closing
+        )
+        if "\u0c00" <= character <= "\u0c7f"
+    )
+
+    if telugu_character_count == 0:
+        raise ValueError(
+            "Translation backend returned no Telugu characters."
+        )
+
+    metadata = dict(
+        script_mapping.get("metadata") or {}
+    )
+
+    metadata["translation"] = {
+        "source_language": (
+            _safe_text(
+                script_mapping.get("language")
+            ).strip()
+            or "en"
+        ),
+        "target_language": "te",
+        "provider": _safe_text(
+            getattr(main_result, "provider", "")
+        ),
+        "model": _safe_text(
+            getattr(main_result, "model", "")
+        ),
+        "closing_provider": _safe_text(
+            getattr(closing_result, "provider", "")
+            if closing_result is not None
+            else ""
+        ),
+        "closing_model": _safe_text(
+            getattr(closing_result, "model", "")
+            if closing_result is not None
+            else ""
+        ),
+        "telugu_character_count": telugu_character_count,
+        "main_warnings": list(main_warnings),
+        "closing_warnings": list(closing_warnings),
+        "validated": True,
+        "english_passthrough": False,
+    }
+
+    return PolishedScript(
+        headline=translated_headline,
+        intro=translated_intro,
+        body=translated_body,
+        closing=translated_closing,
+        language="te",
+        source_script_id=source_script_id,
+        metadata=metadata,
+    )
 
 # =============================================================================
 # NORMALIZATION HELPERS
@@ -271,6 +715,48 @@ def _story_to_scene_input(
         "map_path": _safe_text(mapping.get("map_path") or ""),
         "metadata": dict(mapping.get("metadata") or {}),
     }
+
+def _remove_newsroom_boilerplate(value: str) -> str:
+    """Remove known publisher navigation and subscription boilerplate."""
+
+    markers = (
+        "subscribed with another email",
+        "logout and login",
+        "account subscription benefits",
+        "premium stories",
+        "unlock these with subscription",
+        "the view from india",
+        "first day first show",
+        "today's cache",
+        "your download of the top 5 technology stories",
+        "science for",
+    )
+
+    cleaned_parts: list[str] = []
+
+    for part in value.split("\n\n"):
+        normalized = part.strip()
+
+        prefix, separator, remainder = normalized.partition(" ")
+
+        if (
+            separator
+            and prefix.endswith(".")
+            and prefix[:-1].isdigit()
+        ):
+            normalized = remainder.strip()
+
+        lowered = normalized.casefold()
+
+        if not normalized:
+            continue
+
+        if any(marker in lowered for marker in markers):
+            continue
+
+        cleaned_parts.append(normalized)
+
+    return "\n\n".join(cleaned_parts)
 
 
 # =============================================================================
@@ -682,12 +1168,11 @@ def script_handler(
         if callable(close_method):
             close_method()
 
-
 def polish_handler(
     context: dict[str, Any],
     request: ProductionRequest,
 ) -> Any:
-    script = _require_context(
+    bulletin = _require_context(
         context,
         PipelineStage.SCRIPT.value,
     )
@@ -696,10 +1181,23 @@ def polish_handler(
 
     polisher = EditorialPolisher()
 
-    if isinstance(script, list):
-        return polisher.polish_many(script)
+    if isinstance(bulletin, list):
+        normalized_scripts = [
+            _bulletin_to_polisher_input(item)
+            for item in bulletin
+        ]
+        return polisher.polish_many(normalized_scripts)
 
-    return polisher.polish(script)
+    normalized_script = _bulletin_to_polisher_input(bulletin)
+
+    result = polisher.polish(normalized_script)
+
+    if not result.script.body.strip():
+        raise ValueError(
+            "Editorial polishing unexpectedly produced an empty body."
+        )
+
+    return result
 
 def translate_handler(
     context: dict[str, Any],
@@ -710,27 +1208,29 @@ def translate_handler(
         PipelineStage.POLISH.value,
     )
 
-    try:
-        from news.translator_factory import create_translator
-    except (ImportError, AttributeError):
-        return polished
+    if isinstance(polished, list):
+        translated_scripts = [
+            _translate_polishing_result(item)
+            for item in polished
+        ]
 
-    translator = create_translator()
+        if not translated_scripts:
+            raise ValueError(
+                "Translation stage produced no Telugu scripts."
+            )
 
-    for method_name in (
-        "translate",
-        "translate_script",
-        "translate_many",
-    ):
-        method = getattr(translator, method_name, None)
-        if callable(method):
-            try:
-                return method(polished)
-            except TypeError:
-                continue
+        return translated_scripts
 
-    return polished
+    translated = _translate_polishing_result(polished)
 
+    if _safe_text(
+        getattr(translated, "language", "")
+    ).lower() != "te":
+        raise ValueError(
+            "Translation stage did not return Telugu language output."
+        )
+
+    return translated
 
 def voice_handler(
     context: dict[str, Any],

@@ -288,9 +288,19 @@ def contains_telugu(value: str) -> bool:
 
 
 def extract_numbers(value: str) -> list[str]:
-    """Extract numeric tokens in their original order."""
+    """Extract factual numeric tokens in their original order.
 
-    return _NUMBER_RE.findall(value or "")
+    Structural list markers such as ``1.``, ``2.``, or ``3)``
+    at the beginning of a line are ignored because translation
+    providers may legitimately remove or reformat them.
+    """
+
+    cleaned = re.sub(
+        r"(?m)^\s*\d{1,2}[.)]\s+",
+        "",
+        value or "",
+    )
+    return _NUMBER_RE.findall(cleaned)
 
 
 def extract_urls(value: str) -> list[str]:
