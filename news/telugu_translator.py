@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -251,8 +252,9 @@ class TeluguTranslationBackend(Protocol):
 
 _TELUGU_RE = re.compile(r"[\u0C00-\u0C7F]")
 _NUMBER_RE = re.compile(
-    r"(?<![\w])(?:\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)(?:%|°[CF])?"
+    r"(?<![\w])\d+(?:,\d{2,3})*(?:\.\d+)?(?:%|\u00B0[CF])?"
 )
+
 _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 _JSON_FENCE_RE = re.compile(
     r"^\s*```(?:json)?\s*(.*?)\s*```\s*$",
@@ -288,18 +290,34 @@ def contains_telugu(value: str) -> bool:
 
 
 def extract_numbers(value: str) -> list[str]:
-    """Extract factual numeric tokens in their original order.
+    """Extract and normalize factual numeric tokens.
 
     Structural list markers such as ``1.``, ``2.``, or ``3)``
-    at the beginning of a line are ignored because translation
-    providers may legitimately remove or reformat them.
+    at the beginning of a line are ignored.
+
+    Unicode decimal digits are converted to ASCII before extraction,
+    allowing values such as Telugu digits and Latin digits to compare
+    as the same factual number.
     """
+
+    normalized_characters: list[str] = []
+
+    for character in value or "":
+        if character.isdecimal():
+            normalized_characters.append(
+                str(unicodedata.decimal(character))
+            )
+        else:
+            normalized_characters.append(character)
+
+    normalized_value = "".join(normalized_characters)
 
     cleaned = re.sub(
         r"(?m)^\s*\d{1,2}[.)]\s+",
         "",
-        value or "",
+        normalized_value,
     )
+
     return _NUMBER_RE.findall(cleaned)
 
 
