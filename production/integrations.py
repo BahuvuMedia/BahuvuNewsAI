@@ -1523,13 +1523,46 @@ def graphics_handler(
         PipelineStage.SCENES.value,
     )
 
-    from graphics.graphics_renderer import GraphicsRenderer
-
-    renderer = GraphicsRenderer()
-    return renderer.render_timeline(
-        timeline,
-        metadata=dict(request.metadata),
+    from graphics.graphics_renderer import (
+        GraphicsRenderer,
+        GraphicsRendererConfig,
     )
+    from production.visual_quality import (
+        VisualQualityPolicy,
+        ensure_brand_fallback,
+        prepare_timeline_visuals,
+        validate_graphics_manifest,
+    )
+
+    policy = VisualQualityPolicy()
+    fallback_path = ensure_brand_fallback(policy)
+    preparation = prepare_timeline_visuals(
+        timeline,
+        policy=policy,
+    )
+    context["visual_preparation_report"] = preparation.to_dict()
+
+    renderer = GraphicsRenderer(
+        config=GraphicsRendererConfig(
+            fallback_image_path=str(fallback_path),
+        )
+    )
+    manifest = renderer.render_timeline(
+        timeline,
+        metadata={
+            **dict(request.metadata),
+            "visual_preparation_report": preparation.to_dict(),
+        },
+    )
+
+    quality_report = validate_graphics_manifest(
+        manifest,
+        timeline=timeline,
+        policy=policy,
+    )
+    context["visual_quality_report"] = quality_report.to_dict()
+    return manifest
+
 
 
 def video_handler(
@@ -1550,6 +1583,7 @@ def video_handler(
     )
 
     from production.audio_timing import validate_video_audio_sync
+    from production.visual_quality import validate_final_video_frames
     from video.video_composer import VideoComposer
 
     if hasattr(audio_manifest, "bulletin_audio_path"):
@@ -1569,6 +1603,9 @@ def video_handler(
             "audio_timing_report": dict(
                 context.get("audio_timing_report") or {}
             ),
+            "visual_quality_report": dict(
+                context.get("visual_quality_report") or {}
+            ),
         },
     )
 
@@ -1577,7 +1614,11 @@ def video_handler(
         audio_manifest=audio_manifest,
     )
     context["final_av_sync"] = sync_result
+
+    frame_result = validate_final_video_frames(result)
+    context["final_visual_quality"] = frame_result
     return result
+
 
 
 
