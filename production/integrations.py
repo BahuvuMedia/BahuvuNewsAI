@@ -351,6 +351,7 @@ def _translate_polishing_result(polished: Any) -> Any:
     """
 
     from news.editorial_polisher import PolishedScript
+    from news.telugu_editorial_desk import edit_telugu_bulletin
     from news.telugu_translator import TranslationRequest
     from news.translator_factory import create_translator
 
@@ -529,6 +530,39 @@ def _translate_polishing_result(polished: Any) -> Any:
     metadata = dict(
         script_mapping.get("metadata") or {}
     )
+
+    editorial_result = edit_telugu_bulletin(
+        headline=translated_headline,
+        intro=translated_intro,
+        body=translated_body,
+        closing=translated_closing,
+        strict=False,
+        source_id=source_script_id,
+        metadata=metadata,
+    )
+
+    translated_headline = editorial_result.headline
+    translated_intro = editorial_result.intro
+    translated_body = editorial_result.body
+    translated_closing = editorial_result.closing
+
+    metadata["telugu_editorial_desk"] = {
+        "approved": editorial_result.approved,
+        "changes_applied": len(editorial_result.changes),
+        "quality_issues": len(editorial_result.issues),
+        "changes": list(editorial_result.changes),
+        "issues": [
+            {
+                "code": issue.code,
+                "severity": issue.severity.value,
+                "field": issue.field_name,
+                "message": issue.message,
+                "detail": issue.detail,
+            }
+            for issue in editorial_result.issues
+        ],
+        "strict_mode": False,
+    }
 
     metadata["translation"] = {
         "source_language": (
