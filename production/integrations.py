@@ -613,72 +613,80 @@ def _translate_polishing_result(polished: Any) -> Any:
 def _story_to_audio_input(story: Any, order: int) -> dict[str, Any]:
     mapping = _mapping(story)
 
-    return {
-        "story_id": _safe_text(
-            _first_nonempty(mapping, ("story_id", "article_id", "id"))
-            or f"story_{order:03d}"
+    story_id = _safe_text(
+        _first_nonempty(mapping, ("story_id", "article_id", "id"))
+        or f"story_{order:03d}"
+    )
+    headline = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "display_headline",
+                "headline",
+                "translated_headline",
+                "telugu_headline",
+                "title",
+            ),
+        )
+        or ""
+    ).strip()
+    narration = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "speech_text",
+                "anchor_narration",
+                "body",
+                "translated_body",
+                "telugu_body",
+                "content",
+                "translated_text",
+                "text",
+                "script",
+            ),
+        )
+        or ""
+    ).strip()
+
+    if not narration:
+        raise ValueError(
+            f"Directed story '{story_id}' has no speech narration."
+        )
+
+    metadata = dict(mapping.get("metadata") or {})
+    metadata["broadcast_director"] = {
+        "display_summary": _safe_text(
+            mapping.get("display_summary") or ""
         ),
+        "anchor_narration": _safe_text(
+            mapping.get("anchor_narration") or ""
+        ),
+        "speech_text": narration,
+        "production_ready": bool(
+            mapping.get("production_ready", True)
+        ),
+        "warnings": list(mapping.get("warnings") or []),
+        "blocking_errors": list(
+            mapping.get("blocking_errors") or []
+        ),
+    }
+
+    return {
+        "story_id": story_id,
         "order": int(
             _first_nonempty(mapping, ("order", "position", "rank"))
             or order
         ),
-        "headline": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "headline",
-                    "translated_headline",
-                    "telugu_headline",
-                    "title",
-                ),
-            )
-            or ""
-        ),
-        "intro": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "intro",
-                    "translated_intro",
-                    "telugu_intro",
-                ),
-            )
-            or ""
-        ),
-        "body": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "body",
-                    "translated_body",
-                    "telugu_body",
-                    "content",
-                    "translated_text",
-                    "text",
-                    "script",
-                ),
-            )
-            or ""
-        ),
-        "closing": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "closing",
-                    "translated_closing",
-                    "telugu_closing",
-                    "outro",
-                ),
-            )
-            or ""
-        ),
-        "language": _safe_text(
-            _first_nonempty(mapping, ("language", "language_code"))
-            or "te"
-        ),
+        "headline": headline,
+        "intro": "",
+        "body": narration,
+        "text": narration,
+        "closing": "",
+        "language": "te",
         "category": _safe_text(mapping.get("category") or ""),
-        "metadata": dict(mapping.get("metadata") or {}),
+        "metadata": metadata,
     }
+
 
 
 def _story_to_scene_input(
@@ -689,53 +697,89 @@ def _story_to_scene_input(
     mapping = _mapping(story)
     audio_mapping = _mapping(audio_item) if audio_item is not None else {}
 
-    return {
-        "story_id": _safe_text(
-            _first_nonempty(mapping, ("story_id", "article_id", "id"))
-            or f"story_{order:03d}"
+    story_id = _safe_text(
+        _first_nonempty(mapping, ("story_id", "article_id", "id"))
+        or f"story_{order:03d}"
+    )
+    headline = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "display_headline",
+                "headline",
+                "translated_headline",
+                "telugu_headline",
+                "title",
+            ),
+        )
+        or ""
+    ).strip()
+    summary = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "display_summary",
+                "summary",
+                "translated_summary",
+                "anchor_narration",
+                "body",
+                "translated_body",
+                "content",
+                "translated_text",
+            ),
+        )
+        or ""
+    ).strip()
+
+    preferred_path = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "preferred_image_path",
+                "image_path",
+                "photo_path",
+            ),
+        )
+        or ""
+    ).strip()
+    preferred_url = _safe_text(
+        _first_nonempty(
+            mapping,
+            (
+                "preferred_image_url",
+                "image_url",
+            ),
+        )
+        or ""
+    ).strip()
+
+    directed_scenes = list(mapping.get("scenes") or [])
+    metadata = dict(mapping.get("metadata") or {})
+    metadata["broadcast_director_scenes"] = directed_scenes
+    metadata["visual_search_terms"] = list(
+        mapping.get("visual_search_terms") or []
+    )
+    metadata["fallback_visual"] = next(
+        (
+            _safe_text(_mapping(scene).get("fallback_visual"))
+            for scene in directed_scenes
+            if _safe_text(
+                _mapping(scene).get("fallback_visual")
+            ).strip()
         ),
+        "assets/images/bahuvu_newsroom_background.png",
+    )
+
+    return {
+        "story_id": story_id,
         "order": int(
             _first_nonempty(mapping, ("order", "position", "rank"))
             or order
         ),
-        "headline": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "headline",
-                    "translated_headline",
-                    "telugu_headline",
-                    "title",
-                ),
-            )
-            or ""
-        ),
-        "summary": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "summary",
-                    "translated_summary",
-                    "body",
-                    "translated_body",
-                    "content",
-                    "translated_text",
-                ),
-            )
-            or ""
-        ),
+        "headline": headline,
+        "summary": summary,
         "category": _safe_text(mapping.get("category") or ""),
-        "image_path": _safe_text(
-            _first_nonempty(
-                mapping,
-                (
-                    "image_path",
-                    "photo_path",
-                    "image_url",
-                ),
-            )
-            or ""
-        ),
+        "image_path": preferred_path or preferred_url,
         "audio_path": _safe_text(
             audio_mapping.get("audio_path")
             or audio_mapping.get("path")
@@ -744,53 +788,13 @@ def _story_to_scene_input(
         "audio_duration_seconds": float(
             audio_mapping.get("duration_seconds") or 0.0
         ),
-        "quote": _safe_text(mapping.get("quote") or ""),
-        "data_points": list(mapping.get("data_points") or []),
-        "map_path": _safe_text(mapping.get("map_path") or ""),
-        "metadata": dict(mapping.get("metadata") or {}),
+        "quote": "",
+        "data_points": [],
+        "map_path": "",
+        "metadata": metadata,
     }
 
-def _remove_newsroom_boilerplate(value: str) -> str:
-    """Remove known publisher navigation and subscription boilerplate."""
 
-    markers = (
-        "subscribed with another email",
-        "logout and login",
-        "account subscription benefits",
-        "premium stories",
-        "unlock these with subscription",
-        "the view from india",
-        "first day first show",
-        "today's cache",
-        "your download of the top 5 technology stories",
-        "science for",
-    )
-
-    cleaned_parts: list[str] = []
-
-    for part in value.split("\n\n"):
-        normalized = part.strip()
-
-        prefix, separator, remainder = normalized.partition(" ")
-
-        if (
-            separator
-            and prefix.endswith(".")
-            and prefix[:-1].isdigit()
-        ):
-            normalized = remainder.strip()
-
-        lowered = normalized.casefold()
-
-        if not normalized:
-            continue
-
-        if any(marker in lowered for marker in markers):
-            continue
-
-        cleaned_parts.append(normalized)
-
-    return "\n\n".join(cleaned_parts)
 
 
 # =============================================================================
@@ -1237,34 +1241,108 @@ def translate_handler(
     context: dict[str, Any],
     request: ProductionRequest,
 ) -> Any:
-    polished = _require_context(
-        context,
-        PipelineStage.POLISH.value,
+    _require_context(context, PipelineStage.POLISH.value)
+    bulletin = _require_context(context, PipelineStage.BULLETIN.value)
+
+    from production.broadcast_director import (
+        BroadcastDirector,
+        DirectorConfiguration,
+        PlanStatus,
     )
 
-    if isinstance(polished, list):
-        translated_scripts = [
-            _translate_polishing_result(item)
-            for item in polished
-        ]
+    configuration = DirectorConfiguration(
+        use_ai=bool(request.metadata.get("broadcast_director_ai", True)),
+        require_ai=bool(
+            request.metadata.get("broadcast_director_require_ai", False)
+        ),
+        min_telugu_ratio=float(
+            request.metadata.get("minimum_telugu_ratio", 0.72)
+        ),
+        max_latin_words=int(
+            request.metadata.get("maximum_latin_words", 3)
+        ),
+        preferred_provider=_safe_text(
+            request.metadata.get("broadcast_director_provider")
+            or "gemini"
+        ),
+        preferred_model=_safe_text(
+            request.metadata.get("broadcast_director_model")
+            or "gemini-flash-latest"
+        ),
+    )
 
-        if not translated_scripts:
-            raise ValueError(
-                "Translation stage produced no Telugu scripts."
+    director = BroadcastDirector(configuration=configuration)
+    plan = director.direct(
+        bulletin,
+        production_id=request.production_id,
+    )
+
+    context["broadcast_plan"] = plan
+    context["broadcast_plan_dict"] = plan.to_dict()
+
+    output_root = Path(
+        request.metadata.get("output_dir")
+        or Path("outputs/production") / request.production_id
+    )
+    plan_path = output_root / "broadcast_production_plan.json"
+    plan.save_json(plan_path)
+    context["broadcast_plan_path"] = str(plan_path)
+
+    if plan.status is PlanStatus.BLOCKED:
+        details = list(plan.blocking_errors)
+        for story in plan.stories:
+            details.extend(
+                f"{story.story_id}: {error}"
+                for error in story.blocking_errors
             )
-
-        return translated_scripts
-
-    translated = _translate_polishing_result(polished)
-
-    if _safe_text(
-        getattr(translated, "language", "")
-    ).lower() != "te":
         raise ValueError(
-            "Translation stage did not return Telugu language output."
+            "AI Broadcast Director blocked production. "
+            + " | ".join(details[:20])
         )
 
-    return translated
+    directed_stories: list[dict[str, Any]] = []
+    for story in plan.stories:
+        item = story.to_dict()
+        item.update(
+            {
+                "id": story.story_id,
+                "article_id": story.story_id,
+                "order": story.rank,
+                "headline": story.display_headline,
+                "summary": story.display_summary,
+                "body": story.speech_text,
+                "text": story.speech_text,
+                "translated_text": story.speech_text,
+                "language": "te",
+                "image_path": story.preferred_image_path,
+                "image_url": story.preferred_image_url,
+                "metadata": {
+                    "broadcast_plan_path": str(plan_path),
+                    "broadcast_plan_status": plan.status.value,
+                    "anchor_narration": story.anchor_narration,
+                    "speech_text": story.speech_text,
+                    "pronunciation_notes": dict(
+                        story.pronunciation_notes
+                    ),
+                    "visual_search_terms": list(
+                        story.visual_search_terms
+                    ),
+                    "directed_scenes": [
+                        scene.to_dict() for scene in story.scenes
+                    ],
+                    "warnings": list(story.warnings),
+                },
+            }
+        )
+        directed_stories.append(item)
+
+    if not directed_stories:
+        raise ValueError(
+            "AI Broadcast Director produced no downstream stories."
+        )
+
+    return directed_stories
+
 
 def voice_handler(
     context: dict[str, Any],
@@ -1278,11 +1356,69 @@ def voice_handler(
     from voice.tts_generator import TeluguTTSGenerator
 
     generator = TeluguTTSGenerator()
+    narration_inputs: list[dict[str, Any]] = []
 
-    if isinstance(translated, list):
-        return generator.generate_many(translated)
+    for index, story in enumerate(
+        _as_list(translated),
+        start=1,
+    ):
+        mapping = _mapping(story)
+        story_id = _safe_text(
+            _first_nonempty(
+                mapping,
+                ("story_id", "article_id", "id"),
+            )
+            or f"story_{index:03d}"
+        )
+        speech_text = _safe_text(
+            _first_nonempty(
+                mapping,
+                (
+                    "speech_text",
+                    "text",
+                    "translated_text",
+                    "body",
+                ),
+            )
+            or ""
+        ).strip()
+        if not speech_text:
+            raise ValueError(
+                f"Directed story '{story_id}' has empty speech text."
+            )
 
-    return generator.generate(translated)
+        narration_inputs.append(
+            {
+                "story_id": story_id,
+                "title": _safe_text(
+                    mapping.get("display_headline")
+                    or mapping.get("headline")
+                    or ""
+                ),
+                "text": speech_text,
+                "language": "te",
+                "metadata": dict(mapping.get("metadata") or {}),
+            }
+        )
+
+    results = generator.generate_many(narration_inputs)
+    failures = [
+        result
+        for result in results
+        if not bool(getattr(result, "success", False))
+    ]
+    if failures:
+        messages = [
+            _safe_text(getattr(result, "error", "TTS failed"))
+            for result in failures
+        ]
+        raise RuntimeError(
+            "Telugu voice generation failed: "
+            + " | ".join(messages[:10])
+        )
+
+    return results
+
 
 
 def audio_handler(
