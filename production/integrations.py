@@ -1430,21 +1430,24 @@ def audio_handler(
         PipelineStage.TRANSLATE.value,
     )
 
+    from production.audio_timing import validate_audio_manifest
     from voice.audio_manager import BulletinAudioManager
 
     manager = BulletinAudioManager()
-
     story_values = _as_list(translated)
     normalized = [
         _story_to_audio_input(story, index)
         for index, story in enumerate(story_values, start=1)
     ]
-
-    return manager.generate_bulletin(
+    manifest = manager.generate_bulletin(
         bulletin_id=request.bulletin_id or request.production_id,
         stories=normalized,
         metadata=dict(request.metadata),
     )
+
+    validate_audio_manifest(manifest)
+    return manifest
+
 
 
 def scenes_handler(
@@ -1461,12 +1464,13 @@ def scenes_handler(
     )
 
     from graphics.scene_builder import SceneBuilder
+    from production.audio_timing import synchronize_timeline
 
     manager_stories = _mapping(audio_manifest).get("stories")
     if manager_stories is None and hasattr(audio_manifest, "stories"):
         manager_stories = audio_manifest.stories
-    audio_items = _as_list(manager_stories)
 
+    audio_items = _as_list(manager_stories)
     audio_by_story = {
         _safe_text(
             _mapping(item).get("story_id")
@@ -1477,7 +1481,6 @@ def scenes_handler(
 
     story_values = _as_list(translated)
     scene_stories = []
-
     for index, story in enumerate(story_values, start=1):
         story_mapping = _mapping(story)
         story_id = _safe_text(
@@ -1496,11 +1499,19 @@ def scenes_handler(
         )
 
     builder = SceneBuilder()
-    return builder.build_timeline(
+    timeline = builder.build_timeline(
         bulletin_id=request.bulletin_id or request.production_id,
         stories=scene_stories,
         metadata=dict(request.metadata),
     )
+
+    timing_report = synchronize_timeline(
+        timeline=timeline,
+        audio_manifest=audio_manifest,
+    )
+    context["audio_timing_report"] = timing_report.to_dict()
+    return timeline
+
 
 
 def graphics_handler(
@@ -1538,9 +1549,9 @@ def video_handler(
         PipelineStage.AUDIO.value,
     )
 
+    from production.audio_timing import validate_video_audio_sync
     from video.video_composer import VideoComposer
 
-    audio_path = None
     if hasattr(audio_manifest, "bulletin_audio_path"):
         audio_path = audio_manifest.bulletin_audio_path
     else:
@@ -1549,12 +1560,25 @@ def video_handler(
         )
 
     composer = VideoComposer()
-    return composer.compose_from_manifests(
+    result = composer.compose_from_manifests(
         timeline=timeline,
         graphics_manifest=graphics_manifest,
         bulletin_audio_path=audio_path,
-        metadata=dict(request.metadata),
+        metadata={
+            **dict(request.metadata),
+            "audio_timing_report": dict(
+                context.get("audio_timing_report") or {}
+            ),
+        },
     )
+
+    sync_result = validate_video_audio_sync(
+        video_result=result,
+        audio_manifest=audio_manifest,
+    )
+    context["final_av_sync"] = sync_result
+    return result
+
 
 
 def thumbnail_handler(
