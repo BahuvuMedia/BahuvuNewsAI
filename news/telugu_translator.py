@@ -430,14 +430,43 @@ def parse_translation_response(
 ) -> TranslationResult:
     """Parse a provider response into a TranslationResult."""
 
-    cleaned = strip_markdown_code_fence(raw_response)
+    cleaned = strip_markdown_code_fence(raw_response).strip()
 
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
+    candidates = [cleaned]
+
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+
+    if (
+        first_brace >= 0
+        and last_brace > first_brace
+    ):
+        extracted_object = cleaned[first_brace:last_brace + 1]
+
+        if extracted_object not in candidates:
+            candidates.append(extracted_object)
+
+    data = None
+    last_error = None
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+
+            if isinstance(parsed, Mapping):
+                data = parsed
+                break
+
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if data is None:
+        preview = cleaned[:500].replace("\n", " ")
+
         raise TranslationProviderError(
-            "Translation provider returned invalid JSON."
-        ) from exc
+            "Translation provider returned invalid JSON. "
+            f"Response preview: {preview}"
+        ) from last_error
 
     if not isinstance(data, Mapping):
         raise TranslationProviderError(
@@ -511,9 +540,35 @@ class GoogleGenerativeAIBackend:
             model = genai.GenerativeModel(
                 model_name=self.model_name,
                 generation_config={
-                    "temperature": self.temperature,
+                    "temperature": min(self.temperature, 0.1),
                     "max_output_tokens": self.max_output_tokens,
                     "response_mime_type": "application/json",
+                    "response_schema": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "telugu_headline": {
+                                "type": "STRING",
+                            },
+                            "telugu_summary": {
+                                "type": "STRING",
+                            },
+                            "telugu_script": {
+                                "type": "STRING",
+                            },
+                            "warnings": {
+                                "type": "ARRAY",
+                                "items": {
+                                    "type": "STRING",
+                                },
+                            },
+                        },
+                        "required": [
+                            "telugu_headline",
+                            "telugu_summary",
+                            "telugu_script",
+                            "warnings",
+                        ],
+                    },
                 },
             )
             response = model.generate_content(

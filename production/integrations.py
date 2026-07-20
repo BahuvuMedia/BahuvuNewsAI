@@ -341,6 +341,196 @@ def _remove_newsroom_boilerplate(value: str) -> str:
     return "\n\n".join(cleaned_parts)
 
 
+def _translation_language_metrics(value: str) -> dict[str, float | int]:
+    """Measure Telugu and Latin content in translated newsroom copy."""
+
+    import re
+
+    text = _safe_text(value)
+    telugu_characters = sum(
+        1 for character in text
+        if "\u0c00" <= character <= "\u0c7f"
+    )
+    latin_words = re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)*", text)
+    detected_letters = sum(
+        1 for character in text
+        if character.isalpha()
+    )
+
+    telugu_ratio = (
+        telugu_characters / detected_letters
+        if detected_letters
+        else 0.0
+    )
+
+    return {
+        "telugu_characters": telugu_characters,
+        "latin_words": len(latin_words),
+        "detected_letters": detected_letters,
+        "telugu_ratio": round(telugu_ratio, 4),
+    }
+
+
+def _translation_result_is_acceptable(
+    request: Any,
+    result: Any,
+) -> tuple[bool, str, dict[str, float | int]]:
+    """Reject empty, English-passthrough and token-prefix translations."""
+
+    translated_headline = _safe_text(
+        getattr(result, "telugu_headline", "")
+    ).strip()
+    translated_summary = _safe_text(
+        getattr(result, "telugu_summary", "")
+    ).strip()
+    translated_script = _safe_text(
+        getattr(result, "telugu_script", "")
+    ).strip()
+
+    combined = "\n".join(
+        [
+            translated_headline,
+            translated_summary,
+            translated_script,
+        ]
+    )
+    metrics = _translation_language_metrics(combined)
+
+    if not translated_headline:
+        return False, "translated headline is empty", metrics
+
+    if not translated_script:
+        return False, "translated script is empty", metrics
+
+    source_script = _safe_text(
+        getattr(request, "script", "")
+    ).strip()
+
+    normalized_source = " ".join(source_script.casefold().split())
+    normalized_translation = " ".join(
+        translated_script.casefold().split()
+    )
+
+    if (
+        normalized_source
+        and normalized_translation == normalized_source
+    ):
+        return False, "translation is unchanged English passthrough", metrics
+
+    suspicious_prefixes = (
+        "తెలుగు అనువాదం:",
+        "translation:",
+        "translated text:",
+    )
+
+    if any(
+        translated_script.casefold().startswith(prefix.casefold())
+        for prefix in suspicious_prefixes
+    ):
+        return (
+            False,
+            "translation backend returned a labelled source-text fallback",
+            metrics,
+        )
+
+    telugu_ratio = float(metrics["telugu_ratio"])
+    latin_words = int(metrics["latin_words"])
+    telugu_characters = int(metrics["telugu_characters"])
+
+    if telugu_characters < 40:
+        return (
+            False,
+            f"translation contains only {telugu_characters} Telugu characters",
+            metrics,
+        )
+
+    if telugu_ratio < 0.60:
+        return (
+            False,
+            f"translation Telugu ratio is only {telugu_ratio:.2%}",
+            metrics,
+        )
+
+    # Names and common acronyms may remain Latin, but English narration may not.
+    if latin_words > 35:
+        return (
+            False,
+            f"translation contains {latin_words} Latin words",
+            metrics,
+        )
+
+    return True, "", metrics
+
+
+def _translate_with_quality_gate(
+    backend: Any,
+    request: Any,
+    *,
+    label: str,
+    maximum_attempts: int = 3,
+) -> tuple[Any, dict[str, Any]]:
+    """Translate with retries and reject false Telugu fallback output."""
+
+    translate_method = getattr(backend, "translate", None)
+
+    if not callable(translate_method):
+        raise RuntimeError(
+            "Configured translation backend has no callable translate method."
+        )
+
+    failures: list[str] = []
+    last_exception: Exception | None = None
+
+    for attempt in range(1, maximum_attempts + 1):
+        try:
+            result = translate_method(request)
+            acceptable, reason, metrics = (
+                _translation_result_is_acceptable(request, result)
+            )
+
+            if acceptable:
+                return result, {
+                    "label": label,
+                    "attempts": attempt,
+                    "quality_gate_passed": True,
+                    "metrics": metrics,
+                    "failures": failures,
+                }
+
+            provider = _safe_text(
+                getattr(result, "provider", "")
+            ) or type(backend).__name__
+            model = _safe_text(
+                getattr(result, "model", "")
+            )
+
+            failures.append(
+                f"attempt {attempt}: provider={provider}; "
+                f"model={model}; {reason}; metrics={metrics}"
+            )
+
+        except Exception as exc:
+            last_exception = exc
+            failures.append(
+                f"attempt {attempt}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    detail = " | ".join(failures)
+
+    if last_exception is not None:
+        raise RuntimeError(
+            f"{label} Telugu translation failed after "
+            f"{maximum_attempts} attempts. {detail}"
+        ) from last_exception
+
+    raise RuntimeError(
+        f"{label} Telugu translation failed quality validation after "
+        f"{maximum_attempts} attempts. {detail}"
+    )
+
+
+
 def _translate_polishing_result(polished: Any) -> Any:
     """Translate a PolishingResult into a Telugu PolishedScript.
 
@@ -431,7 +621,11 @@ def _translate_polishing_result(polished: Any) -> Any:
         ),
     )
 
-    main_result = backend.translate(main_request)
+    main_result, main_quality = _translate_with_quality_gate(
+        backend,
+        main_request,
+        label="Main bulletin",
+    )
 
     if validator is not None and callable(
         getattr(validator, "validate", None)
@@ -468,7 +662,11 @@ def _translate_polishing_result(polished: Any) -> Any:
             ),
         )
 
-        closing_result = backend.translate(closing_request)
+        closing_result, closing_quality = _translate_with_quality_gate(
+            backend,
+            closing_request,
+            label="Bulletin closing",
+        )
 
         if validator is not None and callable(
             getattr(validator, "validate", None)
@@ -488,6 +686,13 @@ def _translate_polishing_result(polished: Any) -> Any:
     else:
         closing_result = None
         closing_warnings = []
+        closing_quality = {
+            "label": "Bulletin closing",
+            "attempts": 0,
+            "quality_gate_passed": True,
+            "metrics": {},
+            "failures": [],
+        }
 
     translated_headline = _safe_text(
         getattr(main_result, "telugu_headline", "")
@@ -557,7 +762,9 @@ def _translate_polishing_result(polished: Any) -> Any:
                 "severity": issue.severity.value,
                 "field": issue.field_name,
                 "message": issue.message,
-                "detail": issue.detail,
+                "detail": _safe_text(
+                    getattr(issue, "detail", "")
+                ),
             }
             for issue in editorial_result.issues
         ],
@@ -591,6 +798,8 @@ def _translate_polishing_result(polished: Any) -> Any:
         "telugu_character_count": telugu_character_count,
         "main_warnings": list(main_warnings),
         "closing_warnings": list(closing_warnings),
+        "main_quality_gate": dict(main_quality),
+        "closing_quality_gate": dict(closing_quality),
         "validated": True,
         "english_passthrough": False,
     }
@@ -1241,14 +1450,56 @@ def translate_handler(
     context: dict[str, Any],
     request: ProductionRequest,
 ) -> Any:
-    _require_context(context, PipelineStage.POLISH.value)
-    bulletin = _require_context(context, PipelineStage.BULLETIN.value)
+    polished = _require_context(
+        context,
+        PipelineStage.POLISH.value,
+    )
+    source_bulletin = _require_context(
+        context,
+        PipelineStage.BULLETIN.value,
+    )
 
+    from news.broadcast_editor import (
+        BroadcastEditor,
+        BroadcastEditorConfiguration,
+    )
     from production.broadcast_director import (
         BroadcastDirector,
         DirectorConfiguration,
         PlanStatus,
     )
+
+    translated_script = _translate_polishing_result(polished)
+
+    editor_configuration = BroadcastEditorConfiguration(
+        minimum_telugu_ratio=float(
+            request.metadata.get("minimum_telugu_ratio", 0.72)
+        ),
+        maximum_latin_words=int(
+            request.metadata.get("maximum_latin_words", 3)
+        ),
+        add_story_transitions=bool(
+            request.metadata.get("broadcast_editor_transitions", True)
+        ),
+        minimum_story_words=int(
+            request.metadata.get(
+                "broadcast_editor_minimum_story_words",
+                8,
+            )
+        ),
+    )
+    editor = BroadcastEditor(configuration=editor_configuration)
+    editor_result = editor.edit(
+        translated_script,
+        source_bulletin=source_bulletin,
+        production_id=request.production_id,
+    )
+    bulletin = editor_result.bulletin
+
+    context["translated_script"] = translated_script
+    context["translated_script_dict"] = translated_script.to_dict()
+    context["broadcast_editor_result"] = editor_result
+    context["broadcast_editor_result_dict"] = editor_result.to_dict()
 
     configuration = DirectorConfiguration(
         use_ai=bool(request.metadata.get("broadcast_director_ai", True)),

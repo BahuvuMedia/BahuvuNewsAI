@@ -571,6 +571,7 @@ class BulletinAudioManager:
                     bulletin_audio_path,
                 )
             except Exception as exc:
+                bulletin_audio_path = None
                 errors.append(f"Bulletin assembly failed: {exc}")
 
         status = self._derive_status(
@@ -698,11 +699,26 @@ class BulletinAudioManager:
             raise ValueError("No ready story audio files to assemble.")
 
         ffmpeg = shutil.which(self.config.ffmpeg_binary)
+
         if not ffmpeg:
+            try:
+                import imageio_ffmpeg
+
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception as exc:
+                raise RuntimeError(
+                    "FFmpeg could not be located through PATH or "
+                    "imageio-ffmpeg. Bulletin audio assembly cannot "
+                    f"continue: {exc}"
+                ) from exc
+
+        ffmpeg_path = Path(ffmpeg)
+        if not ffmpeg_path.exists() or not ffmpeg_path.is_file():
             raise RuntimeError(
-                "FFmpeg was not found in PATH. Bulletin audio assembly "
-                "cannot continue."
+                f"Resolved FFmpeg executable does not exist: {ffmpeg_path}"
             )
+
+        ffmpeg = str(ffmpeg_path)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
 

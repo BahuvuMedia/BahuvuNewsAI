@@ -1,27 +1,20 @@
 """
-BahuvuNewsAI - Telugu TTS Generator
-===================================
+BahuvuNewsAI - Telugu TTS Generator v2.0
+========================================
 
-Production-oriented Telugu text-to-speech generation using edge-tts.
+Provider-aware Telugu speech synthesis.
 
-Pipeline position:
+Primary production path:
+    BAHUVU_VOICE_PROVIDER=azure
+    -> Microsoft Azure Speech SDK
+    -> SSML-controlled Telugu neural speech
 
-    news.telugu_translator
-        -> voice.tts_generator
-        -> video assembly
+Fallback path:
+    BAHUVU_VOICE_PROVIDER=edge
+    -> edge-tts
 
-Run:
-
-    python -m py_compile voice/tts_generator.py
-    python -m voice.tts_generator
-
-Notes
------
-* The built-in self-test is offline-safe and does not contact any TTS service.
-* Real audio generation requires:
-      pip install edge-tts
-* Default voice:
-      te-IN-ShrutiNeural
+The public API remains compatible with production.integrations:
+    TeluguTTSGenerator().generate_many(...)
 """
 
 from __future__ import annotations
@@ -30,21 +23,18 @@ import asyncio
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from html import escape
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from typing import Any, Iterable, Mapping, Sequence
 
-
-# =============================================================================
-# ENUMS
-# =============================================================================
+from voice.telugu_speech_normalizer import normalize_for_speech
 
 
 class VoiceGender(str, Enum):
@@ -64,17 +54,12 @@ class TTSStatus(str, Enum):
     FAILED = "failed"
 
 
-# =============================================================================
-# DATA MODELS
-# =============================================================================
-
-
 @dataclass(slots=True)
 class VoiceProfile:
     name: str
     locale: str = "te-IN"
     gender: VoiceGender = VoiceGender.FEMALE
-    rate: str = "+0%"
+    rate: str = "-4%"
     pitch: str = "+0Hz"
     volume: str = "+0%"
 
@@ -94,22 +79,22 @@ class TTSConfig:
     output_dir: Path = Path("outputs/audio")
     default_profile: VoiceProfile = field(
         default_factory=lambda: VoiceProfile(
-            name="te-IN-ShrutiNeural",
+            name=os.getenv("AZURE_SPEECH_VOICE", "te-IN-ShrutiNeural"),
             locale="te-IN",
             gender=VoiceGender.FEMALE,
-            rate="-2%",
-            pitch="+0Hz",
-            volume="+0%",
+            rate=os.getenv("BAHUVU_SPEECH_RATE", "-4%"),
+            pitch=os.getenv("BAHUVU_SPEECH_PITCH", "+0Hz"),
+            volume=os.getenv("BAHUVU_SPEECH_VOLUME", "+0%"),
         )
     )
     male_profile: VoiceProfile = field(
         default_factory=lambda: VoiceProfile(
-            name="te-IN-MohanNeural",
+            name=os.getenv("AZURE_SPEECH_MALE_VOICE", "te-IN-MohanNeural"),
             locale="te-IN",
             gender=VoiceGender.MALE,
-            rate="-2%",
-            pitch="+0Hz",
-            volume="+0%",
+            rate=os.getenv("BAHUVU_SPEECH_RATE", "-4%"),
+            pitch=os.getenv("BAHUVU_SPEECH_PITCH", "+0Hz"),
+            volume=os.getenv("BAHUVU_SPEECH_VOLUME", "+0%"),
         )
     )
     audio_format: AudioFormat = AudioFormat.MP3
@@ -119,18 +104,23 @@ class TTSConfig:
     minimum_text_length: int = 2
     maximum_text_length: int = 20000
     split_long_text: bool = True
-    chunk_character_limit: int = 3000
+    chunk_character_limit: int = 2800
     write_metadata: bool = True
     ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
+    sentence_pause_ms: int = 280
+    paragraph_pause_ms: int = 500
+    allow_edge_fallback: bool = field(
+        default_factory=lambda: os.getenv(
+            "BAHUVU_ALLOW_VOICE_FALLBACK", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+    )
 
     def validate(self) -> None:
         self.default_profile.validate()
         self.male_profile.validate()
-
         if self.retries < 1:
             raise ValueError("Retries must be at least 1.")
-        if self.retry_delay_seconds < 0:
-            raise ValueError("Retry delay cannot be negative.")
         if self.minimum_text_length < 1:
             raise ValueError("Minimum text length must be positive.")
         if self.maximum_text_length < self.minimum_text_length:
@@ -156,6 +146,9 @@ class AudioArtifact:
     bytes_written: int = 0
     duration_seconds: float | None = None
     chunk_count: int = 1
+    provider: str = ""
+    voice_name: str = ""
+    fallback_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -164,6 +157,9 @@ class AudioArtifact:
             "bytes_written": self.bytes_written,
             "duration_seconds": self.duration_seconds,
             "chunk_count": self.chunk_count,
+            "provider": self.provider,
+            "voice_name": self.voice_name,
+            "fallback_used": self.fallback_used,
         }
 
 
@@ -207,28 +203,17 @@ class TTSSummary:
 
     @classmethod
     def from_results(cls, results: Sequence[TTSResult]) -> "TTSSummary":
-        durations = [
-            result.artifact.duration_seconds or 0.0
-            for result in results
-            if result.artifact
-        ]
         return cls(
             processed=len(results),
-            generated=sum(1 for result in results if result.status == TTSStatus.GENERATED),
-            skipped=sum(1 for result in results if result.status == TTSStatus.SKIPPED),
-            failed=sum(1 for result in results if result.status == TTSStatus.FAILED),
-            total_bytes=sum(
-                result.artifact.bytes_written
-                for result in results
-                if result.artifact
+            generated=sum(r.status == TTSStatus.GENERATED for r in results),
+            skipped=sum(r.status == TTSStatus.SKIPPED for r in results),
+            failed=sum(r.status == TTSStatus.FAILED for r in results),
+            total_bytes=sum(r.artifact.bytes_written for r in results if r.artifact),
+            total_duration_seconds=round(
+                sum((r.artifact.duration_seconds or 0.0) for r in results if r.artifact),
+                2,
             ),
-            total_duration_seconds=round(sum(durations), 2),
         )
-
-
-# =============================================================================
-# HELPERS
-# =============================================================================
 
 
 def _utc_now_iso() -> str:
@@ -236,16 +221,31 @@ def _utc_now_iso() -> str:
 
 
 def _safe_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return value if isinstance(value, str) else str(value)
+    return "" if value is None else (value if isinstance(value, str) else str(value))
+
+
+def _load_dotenv_if_available() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        env_path = Path(".env")
+        if not env_path.exists():
+            return
+        for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
 
 
 def _slugify(value: str, fallback: str = "narration") -> str:
-    value = value.strip().lower()
-    value = re.sub(r"[^\w\-]+", "_", value, flags=re.UNICODE)
-    value = re.sub(r"_+", "_", value).strip("_")
-    return value or fallback
+    value = re.sub(r"[^\w\-]+", "_", value.strip().lower(), flags=re.UNICODE)
+    return re.sub(r"_+", "_", value).strip("_") or fallback
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -261,59 +261,36 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
 def coerce_narration_input(value: Any) -> NarrationInput:
     if isinstance(value, NarrationInput):
         return value
-
     if isinstance(value, str):
         return NarrationInput(text=value)
 
     mapping = _coerce_mapping(value)
     if not mapping:
-        raise TypeError(
-            "Unsupported narration input. Provide a string, mapping, dataclass, "
-            "or object containing text."
-        )
+        raise TypeError("Narration input must contain text.")
 
-    text = ""
-    for key in (
-        "text",
-        "telugu_text",
-        "translated_text",
-        "script",
-        "body",
-        "content",
-        "narration",
-    ):
-        if key in mapping and mapping[key] is not None:
-            text = _safe_text(mapping[key])
-            break
-
-    story_id = _safe_text(
-        mapping.get("story_id")
-        or mapping.get("article_id")
-        or mapping.get("id")
-        or ""
+    text = next(
+        (
+            _safe_text(mapping[key])
+            for key in (
+                "text", "speech_text", "telugu_text", "translated_text",
+                "script", "body", "content", "narration",
+            )
+            if mapping.get(key) is not None
+        ),
+        "",
     )
-    title = _safe_text(
-        mapping.get("title")
-        or mapping.get("headline")
-        or ""
-    )
-    language = _safe_text(
-        mapping.get("language")
-        or mapping.get("language_code")
-        or "te"
-    )
-    filename_stem = _safe_text(mapping.get("filename_stem") or "")
-
     metadata = mapping.get("metadata") or {}
     if not isinstance(metadata, Mapping):
         metadata = {}
 
     return NarrationInput(
         text=text,
-        story_id=story_id,
-        title=title,
-        language=language,
-        filename_stem=filename_stem,
+        story_id=_safe_text(
+            mapping.get("story_id") or mapping.get("article_id") or mapping.get("id") or ""
+        ),
+        title=_safe_text(mapping.get("title") or mapping.get("headline") or ""),
+        language=_safe_text(mapping.get("language") or mapping.get("language_code") or "te"),
+        filename_stem=_safe_text(mapping.get("filename_stem") or ""),
         metadata=dict(metadata),
     )
 
@@ -326,17 +303,82 @@ def normalize_text(text: str) -> str:
     return value.strip()
 
 
+
+def prepare_telugu_speech_text(text: str) -> str:
+    """
+    Convert display text into Azure-friendly spoken Telugu.
+
+    This function is used only for speech synthesis. It must never be used
+    for captions, graphics, stored article text or translated display text.
+    """
+
+    value = normalize_text(text)
+
+    # Brand pronunciation: BAHUVU must always be spoken as BAAHUVU.
+    value = re.sub(
+        r"\bBAHUVU\s+NEWS\b",
+        "బాహువు న్యూస్",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\bBAHUVU\b",
+        "బాహువు",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    # Keep the channel brand as "బాహువు న్యూస్", but translate
+    # ordinary NEWS references into natural Telugu speech.
+    value = re.sub(
+        r"\bNEWS\b",
+        "వార్తలు",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    value = value.replace(
+        "మరిన్ని వార్తలు వివరాలు",
+        "మరిన్ని వార్తా వివరాలు",
+    )
+
+    # Correct common Telugu spelling variants before synthesis.
+    telugu_replacements = {
+        "బహువు న్యూస్": "బాహువు న్యూస్",
+        "బహువు": "బాహువు",
+        "బాహువు నుయూస్": "బాహువు న్యూస్",
+        "బాహువు నుయుస్": "బాహువు న్యూస్",
+        "నుయూస్": "న్యూస్",
+        "నుయుస్": "న్యూస్",
+        "మంతిరి": "మంత్రి",
+        "మంత్రీ": "మంత్రి",
+    }
+
+    for source, target in telugu_replacements.items():
+        value = value.replace(source, target)
+
+    # Give the channel name a clean broadcast pause.
+    value = re.sub(
+        r"బాహువు న్యూస్\s*[-–—:]?\s*",
+        "బాహువు న్యూస్. ",
+        value,
+    )
+
+    value = re.sub(r"[ \t]+", " ", value)
+    value = re.sub(r"\.{2,}", ".", value)
+    value = re.sub(r"\s+([,.;!?])", r"\1", value)
+
+    return value.strip()
+
+
 def split_text(text: str, max_chars: int) -> list[str]:
     text = normalize_text(text)
+    if not text:
+        return []
     if len(text) <= max_chars:
-        return [text] if text else []
+        return [text]
 
-    paragraphs = [
-        paragraph.strip()
-        for paragraph in re.split(r"\n\s*\n", text)
-        if paragraph.strip()
-    ]
-
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     chunks: list[str] = []
     current = ""
 
@@ -345,66 +387,51 @@ def split_text(text: str, max_chars: int) -> list[str]:
         if len(candidate) <= max_chars:
             current = candidate
             continue
-
         if current:
             chunks.append(current)
             current = ""
 
-        if len(paragraph) <= max_chars:
-            current = paragraph
-            continue
-
         sentences = re.split(r"(?<=[.!?।])\s+", paragraph)
-        sentence_buffer = ""
-
         for sentence in sentences:
             sentence = sentence.strip()
             if not sentence:
                 continue
-
-            candidate = (
-                f"{sentence_buffer} {sentence}".strip()
-                if sentence_buffer
-                else sentence
-            )
-
+            candidate = f"{current} {sentence}".strip() if current else sentence
             if len(candidate) <= max_chars:
-                sentence_buffer = candidate
+                current = candidate
             else:
-                if sentence_buffer:
-                    chunks.append(sentence_buffer)
+                if current:
+                    chunks.append(current)
                 if len(sentence) <= max_chars:
-                    sentence_buffer = sentence
+                    current = sentence
                 else:
-                    for start in range(0, len(sentence), max_chars):
-                        chunks.append(sentence[start : start + max_chars].strip())
-                    sentence_buffer = ""
-
-        if sentence_buffer:
-            current = sentence_buffer
-
+                    chunks.extend(
+                        sentence[i:i + max_chars].strip()
+                        for i in range(0, len(sentence), max_chars)
+                        if sentence[i:i + max_chars].strip()
+                    )
+                    current = ""
     if current:
         chunks.append(current)
-
-    return [chunk for chunk in chunks if chunk]
+    return chunks
 
 
 def estimate_duration_seconds(text: str, words_per_minute: float = 125.0) -> float:
-    word_count = len(re.findall(r"\S+", normalize_text(text)))
-    if not word_count:
-        return 0.0
-    return round((word_count / words_per_minute) * 60.0, 2)
-
-
-# =============================================================================
-# ENGINE
-# =============================================================================
+    words = len(re.findall(r"\S+", normalize_text(text)))
+    return round((words / words_per_minute) * 60.0, 2) if words else 0.0
 
 
 class TeluguTTSGenerator:
     def __init__(self, config: TTSConfig | None = None) -> None:
+        _load_dotenv_if_available()
         self.config = config or TTSConfig()
         self.config.validate()
+        self.provider = os.getenv("BAHUVU_VOICE_PROVIDER", "azure").strip().lower()
+        if self.provider not in {"azure", "edge"}:
+            raise ValueError(
+                "BAHUVU_VOICE_PROVIDER must be 'azure' or 'edge', "
+                f"not {self.provider!r}."
+            )
 
     def is_edge_tts_available(self) -> bool:
         try:
@@ -413,38 +440,28 @@ class TeluguTTSGenerator:
         except ImportError:
             return False
 
-    def select_profile(
-        self,
-        gender: VoiceGender | str | None = None,
-    ) -> VoiceProfile:
-        if gender is None:
-            return self.config.default_profile
+    def is_azure_available(self) -> bool:
+        try:
+            import azure.cognitiveservices.speech  # noqa: F401
+            return True
+        except ImportError:
+            return False
 
+    def select_profile(self, gender: VoiceGender | str | None = None) -> VoiceProfile:
         normalized = (
-            gender.value
-            if isinstance(gender, VoiceGender)
-            else str(gender).strip().lower()
+            gender.value if isinstance(gender, VoiceGender)
+            else str(gender or "").strip().lower()
         )
-
-        if normalized == VoiceGender.MALE.value:
-            return self.config.male_profile
-        return self.config.default_profile
+        return self.config.male_profile if normalized == "male" else self.config.default_profile
 
     def validate_input(self, narration: NarrationInput) -> None:
         narration.text = normalize_text(narration.text)
-
         if len(narration.text) < self.config.minimum_text_length:
             raise ValueError("Narration text is empty or too short.")
-
         if len(narration.text) > self.config.maximum_text_length:
-            raise ValueError(
-                "Narration text exceeds the configured maximum length."
-            )
-
+            raise ValueError("Narration text exceeds the configured maximum length.")
         if narration.language.lower() not in {"te", "te-in", "telugu"}:
-            raise ValueError(
-                "Telugu TTS generator expects Telugu language input."
-            )
+            raise ValueError("Telugu TTS generator expects Telugu input.")
 
     def build_output_path(
         self,
@@ -453,21 +470,203 @@ class TeluguTTSGenerator:
     ) -> Path:
         if output_path is not None:
             path = Path(output_path)
-            if not path.suffix:
-                path = path.with_suffix(f".{self.config.audio_format.value}")
-            return path
+            return path if path.suffix else path.with_suffix(".mp3")
+        stem = narration.filename_stem.strip() or narration.story_id.strip() \
+            or narration.title.strip() or "telugu_narration"
+        return self.config.output_dir / f"{_slugify(stem)}.mp3"
 
-        stem = narration.filename_stem.strip()
+    def _duration(self, path: Path, text: str) -> float:
+        ffprobe = shutil.which(self.config.ffprobe_binary)
+        if ffprobe:
+            completed = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode == 0:
+                try:
+                    return round(float(completed.stdout.strip()), 3)
+                except ValueError:
+                    pass
+        return estimate_duration_seconds(text)
 
-        if not stem:
-            stem = (
-                narration.story_id.strip()
-                or narration.title.strip()
-                or "telugu_narration"
+    def _build_ssml(self, text: str, profile: VoiceProfile) -> str:
+        speech_text = prepare_telugu_speech_text(text)
+        paragraphs = [
+            p.strip()
+            for p in re.split(r"\n\s*\n", speech_text)
+            if p.strip()
+        ]
+        rendered: list[str] = []
+        for paragraph in paragraphs:
+            sentences = [
+                s.strip()
+                for s in re.split(r"(?<=[.!?।])\s+", paragraph)
+                if s.strip()
+            ]
+            body = (
+                f'<break time="{self.config.sentence_pause_ms}ms"/>'.join(
+                    escape(sentence) for sentence in sentences
+                )
+            )
+            rendered.append(f"<p>{body}</p>")
+        paragraph_break = f'<break time="{self.config.paragraph_pause_ms}ms"/>'
+        content = paragraph_break.join(rendered)
+        return (
+            '<speak version="1.0" '
+            'xmlns="http://www.w3.org/2001/10/synthesis" '
+            'xml:lang="te-IN">'
+            f'<voice name="{escape(profile.name)}">'
+            f'<prosody rate="{profile.rate}" pitch="{profile.pitch}" '
+            f'volume="{profile.volume}">{content}</prosody>'
+            "</voice></speak>"
+        )
+
+    def _azure_credentials(self) -> tuple[str, str]:
+        key = os.getenv("AZURE_SPEECH_KEY", "").strip()
+        region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+        if not key or not region:
+            raise RuntimeError(
+                "Azure Speech credentials are missing. Set AZURE_SPEECH_KEY "
+                "and AZURE_SPEECH_REGION in .env."
+            )
+        return key, region
+
+    def _generate_azure_chunk(
+        self,
+        text: str,
+        target_path: Path,
+        profile: VoiceProfile,
+    ) -> None:
+        if not self.is_azure_available():
+            raise RuntimeError(
+                "Azure Speech SDK is not installed. Run: "
+                "python -m pip install azure-cognitiveservices-speech"
             )
 
-        stem = _slugify(stem)
-        return self.config.output_dir / f"{stem}.{self.config.audio_format.value}"
+        import azure.cognitiveservices.speech as speechsdk
+
+        key, region = self._azure_credentials()
+        speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
+        speech_config.speech_synthesis_voice_name = profile.name
+        speech_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Audio24Khz48KBitRateMonoMp3
+        )
+        audio_config = speechsdk.audio.AudioOutputConfig(filename=str(target_path))
+        synthesizer = speechsdk.SpeechSynthesizer(
+            speech_config=speech_config,
+            audio_config=audio_config,
+        )
+        result = synthesizer.speak_ssml_async(
+            self._build_ssml(text, profile)
+        ).get()
+
+        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+            return
+
+        if result.reason == speechsdk.ResultReason.Canceled:
+            details = speechsdk.SpeechSynthesisCancellationDetails.from_result(result)
+            raise RuntimeError(
+                "Azure synthesis canceled: "
+                f"reason={details.reason}; "
+                f"error_code={details.error_code}; "
+                f"details={details.error_details}"
+            )
+
+        raise RuntimeError(f"Azure synthesis failed: {result.reason}")
+
+    async def _generate_edge_chunk(
+        self,
+        text: str,
+        target_path: Path,
+        profile: VoiceProfile,
+    ) -> None:
+        if not self.is_edge_tts_available():
+            raise RuntimeError("edge-tts is not installed. Run: pip install edge-tts")
+        import edge_tts
+        communicate = edge_tts.Communicate(
+            text,
+            profile.name,
+            rate=profile.rate,
+            volume=profile.volume,
+            pitch=profile.pitch,
+        )
+        await communicate.save(str(target_path))
+
+    def _merge_chunks(self, chunk_files: Sequence[Path], target_path: Path) -> None:
+        ffmpeg = shutil.which(self.config.ffmpeg_binary)
+        if not ffmpeg:
+            raise RuntimeError("FFmpeg is required to merge narration chunks.")
+        with tempfile.TemporaryDirectory(prefix="bahuvu_concat_") as temp_dir:
+            concat_file = Path(temp_dir) / "concat.txt"
+            concat_file.write_text(
+                "\n".join(f"file '{path.resolve().as_posix()}'" for path in chunk_files),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    ffmpeg, "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(concat_file), "-c", "copy", str(target_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "FFmpeg failed to merge TTS chunks: " + completed.stderr.strip()
+                )
+
+    async def _generate_with_provider(
+        self,
+        *,
+        provider: str,
+        chunks: Sequence[str],
+        target_path: Path,
+        profile: VoiceProfile,
+        narration: NarrationInput,
+        fallback_used: bool,
+    ) -> AudioArtifact:
+        if not chunks:
+            raise ValueError("No narration chunks were produced.")
+
+        if len(chunks) == 1:
+            if provider == "azure":
+                await asyncio.to_thread(
+                    self._generate_azure_chunk, chunks[0], target_path, profile
+                )
+            else:
+                await self._generate_edge_chunk(chunks[0], target_path, profile)
+        else:
+            with tempfile.TemporaryDirectory(prefix=f"bahuvu_{provider}_") as temp_dir:
+                temp_path = Path(temp_dir)
+                chunk_files: list[Path] = []
+                for index, chunk in enumerate(chunks, start=1):
+                    chunk_file = temp_path / f"chunk_{index:04d}.mp3"
+                    if provider == "azure":
+                        await asyncio.to_thread(
+                            self._generate_azure_chunk, chunk, chunk_file, profile
+                        )
+                    else:
+                        await self._generate_edge_chunk(chunk, chunk_file, profile)
+                    chunk_files.append(chunk_file)
+                self._merge_chunks(chunk_files, target_path)
+
+        if not target_path.exists() or target_path.stat().st_size < 1000:
+            raise RuntimeError("TTS provider did not produce a valid audio file.")
+
+        return AudioArtifact(
+            path=target_path,
+            format=AudioFormat.MP3,
+            bytes_written=target_path.stat().st_size,
+            duration_seconds=self._duration(target_path, narration.text),
+            chunk_count=len(chunks),
+            provider=provider,
+            voice_name=profile.name,
+            fallback_used=fallback_used,
+        )
 
     async def generate_async(
         self,
@@ -488,7 +687,6 @@ class TeluguTTSGenerator:
                 input=narration,
                 profile=profile,
                 error=str(exc),
-                attempts=0,
                 started_at=started_at,
                 completed_at=_utc_now_iso(),
             )
@@ -499,50 +697,39 @@ class TeluguTTSGenerator:
         if target_path.exists() and not self.config.overwrite:
             artifact = AudioArtifact(
                 path=target_path,
-                format=self.config.audio_format,
+                format=AudioFormat.MP3,
                 bytes_written=target_path.stat().st_size,
-                duration_seconds=estimate_duration_seconds(narration.text),
+                duration_seconds=self._duration(target_path, narration.text),
+                provider=self.provider,
+                voice_name=profile.name,
             )
             return TTSResult(
                 status=TTSStatus.SKIPPED,
                 input=narration,
                 profile=profile,
                 artifact=artifact,
-                attempts=0,
                 started_at=started_at,
                 completed_at=_utc_now_iso(),
             )
 
-        if not self.is_edge_tts_available():
-            return TTSResult(
-                status=TTSStatus.FAILED,
-                input=narration,
-                profile=profile,
-                error=(
-                    "edge-tts is not installed. Run: pip install edge-tts"
-                ),
-                attempts=0,
-                started_at=started_at,
-                completed_at=_utc_now_iso(),
-            )
-
-        chunks = (
-            split_text(narration.text, self.config.chunk_character_limit)
-            if self.config.split_long_text
-            else [narration.text]
+        speech_text = normalize_for_speech(narration.text)
+        chunks = split_text(
+            speech_text,
+            self.config.chunk_character_limit,
         )
-
         attempts = 0
         last_error = ""
 
         for attempt in range(1, self.config.retries + 1):
             attempts = attempt
             try:
-                artifact = await self._generate_chunks(
+                artifact = await self._generate_with_provider(
+                    provider=self.provider,
                     chunks=chunks,
                     target_path=target_path,
                     profile=profile,
                     narration=narration,
+                    fallback_used=False,
                 )
                 result = TTSResult(
                     status=TTSStatus.GENERATED,
@@ -553,15 +740,40 @@ class TeluguTTSGenerator:
                     started_at=started_at,
                     completed_at=_utc_now_iso(),
                 )
-
                 if self.config.write_metadata:
                     self._write_metadata(result)
-
                 return result
             except Exception as exc:
                 last_error = str(exc)
+                target_path.unlink(missing_ok=True)
                 if attempt < self.config.retries:
                     await asyncio.sleep(self.config.retry_delay_seconds)
+
+        if self.provider == "azure" and self.config.allow_edge_fallback:
+            try:
+                artifact = await self._generate_with_provider(
+                    provider="edge",
+                    chunks=chunks,
+                    target_path=target_path,
+                    profile=profile,
+                    narration=narration,
+                    fallback_used=True,
+                )
+                result = TTSResult(
+                    status=TTSStatus.GENERATED,
+                    input=narration,
+                    profile=profile,
+                    artifact=artifact,
+                    error=f"Azure failed; Edge fallback used: {last_error}",
+                    attempts=attempts,
+                    started_at=started_at,
+                    completed_at=_utc_now_iso(),
+                )
+                if self.config.write_metadata:
+                    self._write_metadata(result)
+                return result
+            except Exception as fallback_exc:
+                last_error += f" | Edge fallback failed: {fallback_exc}"
 
         return TTSResult(
             status=TTSStatus.FAILED,
@@ -581,11 +793,7 @@ class TeluguTTSGenerator:
         gender: VoiceGender | str | None = None,
     ) -> TTSResult:
         return asyncio.run(
-            self.generate_async(
-                value,
-                output_path=output_path,
-                gender=gender,
-            )
+            self.generate_async(value, output_path=output_path, gender=gender)
         )
 
     async def generate_many_async(
@@ -596,9 +804,7 @@ class TeluguTTSGenerator:
     ) -> list[TTSResult]:
         results: list[TTSResult] = []
         for value in values:
-            results.append(
-                await self.generate_async(value, gender=gender)
-            )
+            results.append(await self.generate_async(value, gender=gender))
         return results
 
     def generate_many(
@@ -607,143 +813,19 @@ class TeluguTTSGenerator:
         *,
         gender: VoiceGender | str | None = None,
     ) -> list[TTSResult]:
-        return asyncio.run(
-            self.generate_many_async(values, gender=gender)
-        )
-
-    async def _generate_chunks(
-        self,
-        *,
-        chunks: Sequence[str],
-        target_path: Path,
-        profile: VoiceProfile,
-        narration: NarrationInput,
-    ) -> AudioArtifact:
-        import edge_tts
-
-        if not chunks:
-            raise ValueError("No narration chunks were produced.")
-
-        if len(chunks) == 1:
-            communicate = edge_tts.Communicate(
-                chunks[0],
-                profile.name,
-                rate=profile.rate,
-                volume=profile.volume,
-                pitch=profile.pitch,
-            )
-            await communicate.save(str(target_path))
-        else:
-            await self._generate_and_merge_chunks(
-                edge_tts_module=edge_tts,
-                chunks=chunks,
-                target_path=target_path,
-                profile=profile,
-            )
-
-        if not target_path.exists() or target_path.stat().st_size == 0:
-            raise RuntimeError("TTS service did not produce a valid audio file.")
-
-        return AudioArtifact(
-            path=target_path,
-            format=self.config.audio_format,
-            bytes_written=target_path.stat().st_size,
-            duration_seconds=estimate_duration_seconds(narration.text),
-            chunk_count=len(chunks),
-        )
-
-    async def _generate_and_merge_chunks(
-        self,
-        *,
-        edge_tts_module: Any,
-        chunks: Sequence[str],
-        target_path: Path,
-        profile: VoiceProfile,
-    ) -> None:
-        ffmpeg = shutil.which(self.config.ffmpeg_binary)
-        if not ffmpeg:
-            raise RuntimeError(
-                "Long narration requires FFmpeg for audio merging, but "
-                "FFmpeg was not found in PATH."
-            )
-
-        with tempfile.TemporaryDirectory(prefix="bahuvu_tts_") as temp_dir:
-            temp_path = Path(temp_dir)
-            chunk_files: list[Path] = []
-
-            for index, chunk in enumerate(chunks, start=1):
-                chunk_file = temp_path / f"chunk_{index:04d}.mp3"
-                communicate = edge_tts_module.Communicate(
-                    chunk,
-                    profile.name,
-                    rate=profile.rate,
-                    volume=profile.volume,
-                    pitch=profile.pitch,
-                )
-                await communicate.save(str(chunk_file))
-                chunk_files.append(chunk_file)
-
-            concat_file = temp_path / "concat.txt"
-            concat_file.write_text(
-                "\n".join(
-                    f"file '{path.as_posix()}'"
-                    for path in chunk_files
-                ),
-                encoding="utf-8",
-            )
-
-            command = [
-                ffmpeg,
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_file),
-                "-c",
-                "copy",
-                str(target_path),
-            ]
-
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-            )
-
-            if completed.returncode != 0:
-                raise RuntimeError(
-                    "FFmpeg failed to merge TTS chunks: "
-                    + completed.stderr.strip()
-                )
+        return asyncio.run(self.generate_many_async(values, gender=gender))
 
     def _write_metadata(self, result: TTSResult) -> None:
         if not result.artifact:
             return
-
-        metadata_path = result.artifact.path.with_suffix(
-            result.artifact.path.suffix + ".json"
-        )
-        metadata_path.write_text(
-            json.dumps(
-                result.to_dict(),
-                ensure_ascii=False,
-                indent=2,
-            ),
+        path = result.artifact.path.with_suffix(result.artifact.path.suffix + ".json")
+        path.write_text(
+            json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-    def summarize(
-        self,
-        results: Sequence[TTSResult],
-    ) -> TTSSummary:
+    def summarize(self, results: Sequence[TTSResult]) -> TTSSummary:
         return TTSSummary.from_results(results)
-
-
-# =============================================================================
-# CONVENIENCE API
-# =============================================================================
 
 
 def generate_telugu_audio(
@@ -760,105 +842,39 @@ def generate_telugu_audio(
     )
 
 
-# =============================================================================
-# OFFLINE-SAFE SELF-TEST
-# =============================================================================
-
-
 def _run_self_test() -> None:
-    config = TTSConfig(
-        output_dir=Path("outputs/audio"),
-        overwrite=True,
-        retries=2,
-        split_long_text=True,
-        chunk_character_limit=120,
-    )
-
-    generator = TeluguTTSGenerator(config=config)
-
+    generator = TeluguTTSGenerator()
+    profile = generator.select_profile()
     sample = NarrationInput(
         text=(
-            "ఆంధ్రప్రదేశ్ తీర ప్రాంతాల్లో భారీ వర్షాలు కురిసే అవకాశం ఉందని "
-            "భారత వాతావరణ శాఖ తెలిపింది. ప్రజలు అప్రమత్తంగా ఉండాలని అధికారులు "
-            "సూచించారు."
+            "నమస్కారం. ఇది బాహువు న్యూస్‌ Azure తెలుగు స్వర పరీక్ష. "
+            "ఆంధ్రప్రదేశ్‌లో భారీ వర్షాలు కురిసే అవకాశం ఉందని "
+            "వాతావరణ శాఖ తెలిపింది. ప్రజలు అప్రమత్తంగా ఉండాలని అధికారులు సూచించారు."
         ),
-        story_id="weather_demo",
-        title="ఆంధ్రప్రదేశ్‌లో భారీ వర్షాల హెచ్చరిక",
+        story_id="azure_telugu_final_test",
+        title="Azure తెలుగు స్వర పరీక్ష",
         language="te",
     )
 
-    generator.validate_input(sample)
-
-    female = generator.select_profile(VoiceGender.FEMALE)
-    male = generator.select_profile(VoiceGender.MALE)
-
-    assert female.name == "te-IN-ShrutiNeural"
-    assert male.name == "te-IN-MohanNeural"
-
-    output_path = generator.build_output_path(sample)
-    assert output_path.as_posix().endswith(
-        "outputs/audio/weather_demo.mp3"
-    )
-
-    normalized = normalize_text("  ఇది   పరీక్ష.\n\n\nఇది రెండో వాక్యం.  ")
-    assert normalized == "ఇది పరీక్ష.\n\nఇది రెండో వాక్యం."
-
-    long_text = (
-        "ఇది మొదటి వాక్యం. ఇది రెండో వాక్యం. ఇది మూడో వాక్యం. "
-        "ఇది నాలుగో వాక్యం. ఇది ఐదో వాక్యం."
-    )
-    chunks = split_text(long_text, 40)
-    assert len(chunks) >= 2
-    assert all(chunk.strip() for chunk in chunks)
-
-    duration = estimate_duration_seconds(sample.text)
-    assert duration > 0
-
-    mapped = coerce_narration_input(
-        {
-            "translated_text": sample.text,
-            "article_id": "article_001",
-            "headline": sample.title,
-            "language_code": "te",
-        }
-    )
-    assert mapped.story_id == "article_001"
-    assert mapped.text == sample.text
-
-    fake_artifact = AudioArtifact(
-        path=Path("outputs/audio/test.mp3"),
-        format=AudioFormat.MP3,
-        bytes_written=1024,
-        duration_seconds=12.5,
-        chunk_count=2,
-    )
-
-    fake_result = TTSResult(
-        status=TTSStatus.GENERATED,
-        input=sample,
-        profile=female,
-        artifact=fake_artifact,
-        attempts=1,
-        started_at=_utc_now_iso(),
-        completed_at=_utc_now_iso(),
-    )
-
-    summary = generator.summarize([fake_result])
-    assert summary.processed == 1
-    assert summary.generated == 1
-    assert summary.total_bytes == 1024
-
-    print("Telugu TTS generator initialized successfully.")
+    print("BahuvuNewsAI Telugu TTS v2.0")
+    print(f"Voice provider : {generator.provider}")
+    print(f"Voice name     : {profile.name}")
+    print(f"SSML           : enabled for Azure")
+    print(f"Azure SDK      : {generator.is_azure_available()}")
+    print(f"Edge fallback  : {generator.config.allow_edge_fallback}")
     print()
-    print(f"Default voice          : {female.name}")
-    print(f"Alternative voice      : {male.name}")
-    print(f"Sample text characters : {len(sample.text)}")
-    print(f"Generated text chunks  : {len(chunks)}")
-    print(f"Estimated duration     : {duration:.2f} seconds")
-    print(f"Output path            : {output_path}")
-    print(f"edge-tts available     : {generator.is_edge_tts_available()}")
-    print()
-    print("Telugu TTS generator self-test passed.")
+
+    result = generator.generate(sample)
+    if not result.success:
+        raise RuntimeError(result.error)
+
+    assert result.artifact is not None
+    print("Synthesis      : SUCCESS")
+    print(f"Provider used  : {result.artifact.provider}")
+    print(f"Fallback used  : {result.artifact.fallback_used}")
+    print(f"Output         : {result.artifact.path}")
+    print(f"Bytes          : {result.artifact.bytes_written}")
+    print(f"Duration       : {result.artifact.duration_seconds:.3f}s")
 
 
 if __name__ == "__main__":

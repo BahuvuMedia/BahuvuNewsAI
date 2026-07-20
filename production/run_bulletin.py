@@ -443,11 +443,29 @@ def enrich_article(article: Any) -> bool:
         )
         return False
 
+    from news.content_cleaner import (
+        assert_clean_content,
+        clean_publisher_content,
+    )
+
+    cleaned_body = clean_publisher_content(body)
+
+    if len(cleaned_body) < 250:
+        print(
+            "Article enrichment produced insufficient newsroom-safe text "
+            f"| title={article_title(article)} "
+            f"| raw_characters={len(body)} "
+            f"| cleaned_characters={len(cleaned_body)}"
+        )
+        return False
+
+    assert_clean_content(cleaned_body)
+
     if hasattr(article, "raw_text"):
         article.raw_text = body
 
     if hasattr(article, "cleaned_text"):
-        article.cleaned_text = body
+        article.cleaned_text = cleaned_body
 
     if hasattr(article, "description"):
         current_description = text_value(
@@ -455,7 +473,7 @@ def enrich_article(article: Any) -> bool:
         )
 
         if not current_description:
-            article.description = description or body[:500]
+            article.description = description or cleaned_body[:500]
 
     if hasattr(article, "summary"):
         current_summary = text_value(
@@ -463,7 +481,7 @@ def enrich_article(article: Any) -> bool:
         )
 
         if not current_summary:
-            article.summary = description or body[:500]
+            article.summary = description or cleaned_body[:500]
 
     if hasattr(article, "metadata"):
         metadata = dict(
@@ -474,6 +492,8 @@ def enrich_article(article: Any) -> bool:
                 "page_enriched": True,
                 "enriched_url": url,
                 "enriched_body_characters": len(body),
+                "cleaned_body_characters": len(cleaned_body),
+                "publisher_boilerplate_removed": len(cleaned_body) < len(body),
             }
         )
         article.metadata = metadata
