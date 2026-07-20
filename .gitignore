@@ -30,3 +30,30 @@ Desktop.ini
 credentials/
 assets/images/client_secret_*.json
 
+
+# Local Python environments
+.venv311/
+
+# Generated assets and diagnostics
+assets/generated/
+*.bak
+*_backup/
+*_snapshot.txt
+*_paths.txt
+*_diagnostic.json
+
+# Local repair/install scripts
+configure_direct_gemini_translation.py
+fix_generic_news_telugu.py
+install_gemini_schema_fix.py
+install_telugu_pronunciation_fix.py
+install_translation_reliability.py
+
+# Local exploratory tests
+direct_gemini_translation_test.py
+test_all_gemini_keys.py
+test_baahuvu_pronunciation.py
+
+# Accidental duplicate source copies
+assets/images/tts_generator_v2.py
+assets/images/tts_generator_v2 (1).py
